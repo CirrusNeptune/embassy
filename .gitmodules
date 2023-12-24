@@ -1,0 +1,4 @@
+[submodule "edge-net"]
+	path = edge-net
+	url = https://github.com/CirrusNeptune/edge-net.git
+	branch = squishy

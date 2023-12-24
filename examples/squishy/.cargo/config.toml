@@ -1,0 +1,11 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+#runner = "probe-rs run --chip RP2040"
+runner = "elf2uf2-rs"
+
+[build]
+target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
+
+[env]
+DEFMT_LOG = "error"
+DEFMT_RTT_BUFFER_SIZE= "4096"
+EMBASSY_EXECUTOR_TASK_ARENA_SIZE = "16384"

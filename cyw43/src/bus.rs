@@ -166,6 +166,8 @@ where
             // Advance ptr.
             addr += len as u32;
             data = &data[len..];
+
+            embassy_futures::yield_now().await;
         }
     }
 

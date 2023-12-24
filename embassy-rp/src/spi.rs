@@ -31,6 +31,13 @@ pub struct Config {
     pub polarity: Polarity,
 }
 
+impl Config {
+    /// Constructor
+    pub fn new(frequency: u32, phase: Phase, polarity: Polarity) -> Self {
+        Self { frequency, phase, polarity }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {

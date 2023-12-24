@@ -51,6 +51,13 @@ pub struct Config {
     pub frequency: u32,
 }
 
+impl Config {
+    /// Constructor
+    pub fn with_frequency(frequency: u32) -> Self {
+        Self { frequency }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self { frequency: 100_000 }
