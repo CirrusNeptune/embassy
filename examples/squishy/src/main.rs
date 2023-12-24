@@ -142,27 +142,4 @@ async fn main(spawner: Spawner) {
         debug!("connection dropped, waiting {} seconds", WAIT_SECS);
         Timer::after_secs(WAIT_SECS).await;
     }
-
-    /*
-       {
-           let interp0 = pac::SIO.interp(0);
-
-           interp0.ctrl_lane0().write(|c| {
-               let mut c0 = pac::sio::regs::Interp0ctrlLane0::default();
-               c0.set_mask_msb(31);
-               c0.set_blend(true);
-               c.0 = c0.0;
-           });
-           interp0.ctrl_lane1().write(|c| {
-               c.set_mask_msb(31);
-           });
-           interp0.base0().write(|b| *b = 500);
-           interp0.base1().write(|b| *b = 1000);
-
-           for i in 0..=6 {
-               interp0.accum1().write(|a| *a = 255 * i / 6);
-               info!("interp {}", interp0.peek_lane1().read());
-           }
-       }
-    */
 }
