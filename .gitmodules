@@ -2,3 +2,7 @@
 	path = edge-net
 	url = https://github.com/CirrusNeptune/edge-net.git
 	branch = squishy
+[submodule "defmt"]
+	path = defmt
+	url = https://github.com/CirrusNeptune/defmt.git
+	branch = rp2040-multicore

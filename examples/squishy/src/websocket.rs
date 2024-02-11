@@ -433,11 +433,7 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
                 }
                 select::Either::Second(command) => {
                     // App command
-                    let owned_command = *command;
-                    self.receiver.receive_done();
-                    if let Some(cmd) = owned_command {
-                        self.send_command(&cmd).await?;
-                    }
+                    self.send_command(&command).await?;
                 }
             }
         }

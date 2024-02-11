@@ -16,7 +16,7 @@ cyw43 = { path = "../../cyw43", features = ["defmt", "firmware-logs"] }
 cyw43-pio = { path = "../../cyw43-pio", features = ["defmt", "overclock"] }
 
 defmt = "0.3"
-defmt-rtt = "0.4"
+defmt-rtt = { version = "0.4", path = "../../defmt/firmware/defmt-rtt" }
 
 cortex-m = { version = "0.7.6", features = ["inline-asm"] }
 cortex-m-rt = { version = "0.7.0" }

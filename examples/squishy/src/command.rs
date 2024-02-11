@@ -1,6 +1,5 @@
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::zerocopy_channel::{Channel, Receiver, Sender};
-use static_cell::StaticCell;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::{Channel, Receiver, Sender};
 
 use crate::consts;
 use crate::leds::{Color, Keyframe};
@@ -63,12 +62,10 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 255, g: 255, b: 255 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 255, g: 255, b: 255 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "Daylight",
@@ -139,12 +136,10 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 240, g: 143, b: 44 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 240, g: 143, b: 44 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "Cozy",
@@ -199,12 +194,10 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 232, g: 95, b: 38 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 232, g: 95, b: 38 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "Club",
@@ -287,24 +280,20 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 255, g: 243, b: 188 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 255, g: 243, b: 188 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "Warm White",
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 114, g: 108, b: 92 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 114, g: 108, b: 92 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "Night light",
@@ -331,12 +320,10 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
         }),
     },
     HaButtonCommand {
-        keyframes: &[
-            Keyframe {
-                frame: 0,
-                color: Color { r: 30, g: 30, b: 133 },
-            },
-        ],
+        keyframes: &[Keyframe {
+            frame: 0,
+            color: Color { r: 30, g: 30, b: 133 },
+        }],
         command: HaCommand::SetEffect(HaCommandSetEffect {
             entity_name: consts::DESK_STRIP_ENTITY,
             effect_name: "TV time",
@@ -368,55 +355,48 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
     },
 ];
 
-pub type CommandReceiver = Receiver<'static, ThreadModeRawMutex, Option<HaCommand>>;
+pub type CommandReceiver = Receiver<'static, NoopRawMutex, HaCommand, CHANNEL_BUF_LEN>;
 
-pub struct CommandSender(Sender<'static, ThreadModeRawMutex, Option<HaCommand>>);
+pub struct CommandSender(Sender<'static, NoopRawMutex, HaCommand, CHANNEL_BUF_LEN>);
 
 impl CommandSender {
-    pub fn borrow(&mut self) -> CommandSender {
-        // SAFETY: inner channel reference is 'static
-        CommandSender(unsafe { &mut *(self as *mut CommandSender) }.0.borrow())
+    pub fn clone(&mut self) -> CommandSender {
+        CommandSender(self.0.clone())
     }
 
     pub fn set_effect(&mut self, entity_name: &'static str, effect_name: &'static str) {
-        if let Some(v) = self.0.try_send() {
-            v.replace(HaCommand::SetEffect(HaCommandSetEffect {
+        self.0
+            .try_send(HaCommand::SetEffect(HaCommandSetEffect {
                 entity_name,
                 effect_name,
-            }));
-            self.0.send_done();
-        }
+            }))
+            .ok();
     }
 
     pub fn on_button_pressed(&mut self, i: usize) {
         if let Some(button_cmd) = BUTTON_COMMANDS.get(i) {
-            if let Some(v) = self.0.try_send() {
-                v.replace(button_cmd.command);
-                self.0.send_done();
-            }
+            self.0.try_send(button_cmd.command).ok();
         }
     }
 }
 
-pub struct CommandChannel(Channel<'static, ThreadModeRawMutex, Option<HaCommand>>);
+pub struct CommandChannel(Channel<NoopRawMutex, HaCommand, CHANNEL_BUF_LEN>);
 
 impl CommandChannel {
-    pub fn new(buf: &'static mut [Option<HaCommand>]) -> Self {
-        Self(Channel::new(buf))
+    pub const fn new() -> Self {
+        Self(Channel::new())
     }
-    pub fn split(&'static mut self) -> (CommandSender, CommandReceiver) {
-        let (sender, receiver) = self.0.split();
-        (CommandSender(sender), receiver)
+
+    pub fn sender(&'static mut self) -> CommandSender {
+        CommandSender(self.0.sender())
+    }
+
+    pub fn receiver(&'static mut self) -> CommandReceiver {
+        self.0.receiver()
     }
 }
 
 const CHANNEL_BUF_LEN: usize = 64;
-
-pub fn make_channel() -> &'static mut CommandChannel {
-    static BUF: StaticCell<[Option<HaCommand>; CHANNEL_BUF_LEN]> = StaticCell::new();
-    let buf = BUF.init([Default::default(); CHANNEL_BUF_LEN]);
-    static CHANNEL: StaticCell<CommandChannel> = StaticCell::new();
-    CHANNEL.init(CommandChannel::new(buf))
-}
+pub(crate) static mut COMMAND_CHANNEL: CommandChannel = CommandChannel::new();
 
 pub const ENTITIES_TO_SUBSCRIBE: [&str; 1] = [consts::DESK_STRIP_ENTITY];

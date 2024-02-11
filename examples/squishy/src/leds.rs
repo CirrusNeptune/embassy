@@ -1,10 +1,9 @@
-use defmt::{assert, info};
+use defmt::{assert, debug, info, unwrap};
 use embassy_futures::select;
 use embassy_rp::{gpio, spi};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::zerocopy_channel::{Channel, Receiver, Sender};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration, Instant, Timer};
-use static_cell::StaticCell;
 
 use crate::command::{HaCommand, BUTTON_COMMANDS};
 use crate::{consts, define_peripheral_set};
@@ -35,27 +34,22 @@ pub enum LedCommand {
     OrButtonCheckedMask(u16),
 }
 
-pub type LedReceiver = Receiver<'static, ThreadModeRawMutex, Option<LedCommand>>;
+unsafe impl Send for LedCommand {}
 
-pub struct LedSender(Sender<'static, ThreadModeRawMutex, Option<LedCommand>>);
+pub type LedReceiver = Receiver<'static, CriticalSectionRawMutex, LedCommand, CHANNEL_BUF_LEN>;
+
+pub struct LedSender(Sender<'static, CriticalSectionRawMutex, LedCommand, CHANNEL_BUF_LEN>);
 impl LedSender {
-    pub fn borrow(&mut self) -> LedSender {
-        // SAFETY: inner channel reference is 'static
-        LedSender(unsafe { &mut *(self as *mut LedSender) }.0.borrow())
+    pub fn clone(&mut self) -> LedSender {
+        LedSender(self.0.clone())
     }
 
     pub fn set_button_checked_mask(&mut self, mask: u16) {
-        if let Some(v) = self.0.try_send() {
-            v.replace(LedCommand::SetButtonCheckedMask(mask));
-            self.0.send_done();
-        }
+        self.0.try_send(LedCommand::SetButtonCheckedMask(mask)).ok();
     }
 
     pub fn or_button_checked_mask(&mut self, mask: u16) {
-        if let Some(v) = self.0.try_send() {
-            v.replace(LedCommand::OrButtonCheckedMask(mask));
-            self.0.send_done();
-        }
+        self.0.try_send(LedCommand::OrButtonCheckedMask(mask)).ok();
     }
 
     pub fn on_effect_changed(&mut self, entity_name: &str, effect_name: &str) {
@@ -80,26 +74,24 @@ impl LedSender {
     }
 }
 
-pub struct LedChannel(Channel<'static, ThreadModeRawMutex, Option<LedCommand>>);
+pub struct LedChannel(Channel<CriticalSectionRawMutex, LedCommand, CHANNEL_BUF_LEN>);
 
 impl LedChannel {
-    pub fn new(buf: &'static mut [Option<LedCommand>]) -> Self {
-        Self(Channel::new(buf))
+    pub const fn new() -> Self {
+        Self(Channel::new())
     }
-    pub fn split(&'static mut self) -> (LedSender, LedReceiver) {
-        let (sender, receiver) = self.0.split();
-        (LedSender(sender), receiver)
+
+    pub fn sender(&'static mut self) -> LedSender {
+        LedSender(self.0.sender())
+    }
+
+    pub fn receiver(&'static mut self) -> LedReceiver {
+        self.0.receiver()
     }
 }
 
 const CHANNEL_BUF_LEN: usize = 64;
-
-pub fn make_channel() -> &'static mut LedChannel {
-    static BUF: StaticCell<[Option<LedCommand>; CHANNEL_BUF_LEN]> = StaticCell::new();
-    let buf = BUF.init([Default::default(); CHANNEL_BUF_LEN]);
-    static CHANNEL: StaticCell<LedChannel> = StaticCell::new();
-    CHANNEL.init(LedChannel::new(buf))
-}
+pub(crate) static mut LED_CHANNEL: LedChannel = LedChannel::new();
 
 struct SpiTx<'d, T: spi::Instance, P: gpio::Pin> {
     spi: spi::Spi<'d, T, spi::Async>,
@@ -136,45 +128,91 @@ pub struct Keyframe {
     pub(crate) color: Color,
 }
 
+#[derive(Copy, Clone)]
 struct KeyframeReader {
     keyframes: &'static [Keyframe],
-    cur_keyframe: u32,
+    last_frame: u32,
+    frame_a: u32,
+    frame_b: u32,
+    ib: usize,
 }
 
-fn evaluate_color_at_frame(keyframes: &[Keyframe], frame: u64) -> Color {
-    if keyframes.is_empty() {
-        return Color { r: 0, g: 0, b: 0 };
-    } else if keyframes.len() == 1 {
-        return unsafe { keyframes.get_unchecked(0).color };
+impl Default for KeyframeReader {
+    fn default() -> Self {
+        static DEFAULT_KEYFRAMES: [Keyframe; 0] = [];
+        Self { keyframes: &DEFAULT_KEYFRAMES, last_frame: 0, frame_a: 0, frame_b: 0, ib: 1 }
     }
-    let last_frame = unsafe { keyframes.get_unchecked(keyframes.len() - 1).frame };
-    let mod_frame = (frame % last_frame as u64) as u32;
-    let mut ib = 0;
-    for (i, kf) in keyframes.iter().enumerate() {
-        if kf.frame > mod_frame {
-            ib = i;
-            break;
+}
+
+impl KeyframeReader {
+    pub fn set_keyframes(&mut self, keyframes: &'static [Keyframe]) {
+        self.keyframes = keyframes;
+
+        self.last_frame = if let Some(kf) = keyframes.last() {
+            kf.frame
+        } else {
+            0
+        };
+
+        self.frame_a = if let Some(kf) = keyframes.get(0) {
+            kf.frame
+        } else {
+            0
+        };
+
+        self.frame_b = if let Some(kf) = keyframes.get(1) {
+            kf.frame
+        } else {
+            self.frame_a
+        };
+
+        self.ib = 1;
+    }
+
+    pub fn evaluate_color_at_frame(&mut self, frame: u64) -> Color {
+        if self.keyframes.is_empty() {
+            return Color { r: 0, g: 0, b: 0 };
+        } else if self.keyframes.len() == 1 {
+            return unsafe { self.keyframes.get_unchecked(0).color };
         }
-    }
-    assert!(ib > 0);
-    let a = &keyframes[ib - 1];
-    let b = &keyframes[ib];
-    let seg_duration = b.frame - a.frame;
-    assert!(seg_duration > 0);
-    let seg_instant = mod_frame - a.frame;
-    let r = (b.color.r as u32 * seg_instant + a.color.r as u32 * (seg_duration - seg_instant)) / seg_duration;
-    let g = (b.color.g as u32 * seg_instant + a.color.g as u32 * (seg_duration - seg_instant)) / seg_duration;
-    let b = (b.color.b as u32 * seg_instant + a.color.b as u32 * (seg_duration - seg_instant)) / seg_duration;
-    //debug!("{} [{},{}]: {} {} {}", mod_frame, ib - 1, ib, r, g, b);
-    Color {
-        r: r as u8,
-        g: g as u8,
-        b: b as u8,
+
+        let mod_frame = (frame % self.last_frame as u64) as u32;
+        if mod_frame < self.frame_a {
+            self.ib = 1;
+            self.frame_a = self.keyframes[self.ib - 1].frame;
+            self.frame_b = self.keyframes[self.ib].frame;
+        }
+        if mod_frame >= self.frame_b {
+            self.ib += 1;
+            while self.keyframes[self.ib].frame < mod_frame {
+                self.ib += 1;
+            }
+            self.frame_a = self.keyframes[self.ib - 1].frame;
+            self.frame_b = self.keyframes[self.ib].frame;
+        }
+
+        let a = &self.keyframes[self.ib - 1];
+        let b = &self.keyframes[self.ib];
+        let seg_duration = b.frame - a.frame;
+        assert!(seg_duration > 0);
+        let seg_instant = mod_frame - a.frame;
+
+        let r = (b.color.r as u32 * seg_instant + a.color.r as u32 * (seg_duration - seg_instant)) / seg_duration;
+        let g = (b.color.g as u32 * seg_instant + a.color.g as u32 * (seg_duration - seg_instant)) / seg_duration;
+        let b = (b.color.b as u32 * seg_instant + a.color.b as u32 * (seg_duration - seg_instant)) / seg_duration;
+        //debug!("{} [{},{}]: ({} {} {})", mod_frame, self.ib - 1, self.ib, r, g, b);
+
+        Color {
+            r: r as u8,
+            g: g as u8,
+            b: b as u8,
+        }
     }
 }
 
 struct Leds<'d, T: spi::Instance, P: gpio::Pin> {
     spi: SpiTx<'d, T, P>,
+    keyframe_readers: [KeyframeReader; NUM_PADS],
     buffer: [u8; NUM_BUF_BYTES],
     checked_mask: u16,
     brightness_buffer: [u32; NUM_PADS],
@@ -187,8 +225,16 @@ const BRIGHTNESS_MIN: u32 = 1;
 
 impl<'d, T: spi::Instance, P: gpio::Pin> Leds<'d, T, P> {
     pub fn new(spi: SpiTx<'d, T, P>) -> Self {
+        let mut keyframe_readers: [KeyframeReader; NUM_PADS] = [Default::default(); NUM_PADS];
+        for i in 0..NUM_PADS {
+            if let Some(button_cmd) = BUTTON_COMMANDS.get(i) {
+                keyframe_readers[i].set_keyframes(button_cmd.keyframes);
+            }
+        }
+
         Self {
             spi,
+            keyframe_readers,
             buffer: [0_u8; NUM_BUF_BYTES],
             checked_mask: 0,
             brightness_buffer: [BRIGHTNESS_MAX * BRIGHTNESS_INTERP_MUL; NUM_PADS],
@@ -235,23 +281,19 @@ impl<'d, T: spi::Instance, P: gpio::Pin> Leds<'d, T, P> {
                     .max(BRIGHTNESS_MIN * BRIGHTNESS_INTERP_MUL);
             }
 
-            if let Some(button_cmd) = BUTTON_COMMANDS.get(i) {
-                let color = evaluate_color_at_frame(button_cmd.keyframes, cur_period * 10);
-                self.set_led_value(
-                    i,
-                    (self.brightness_buffer[i] / BRIGHTNESS_INTERP_MUL) as u8,
-                    color.r,
-                    color.g,
-                    color.b,
-                );
-            } else {
-                self.set_led_value(i, 0, 0, 0, 0);
-            }
+            let color = self.keyframe_readers[i].evaluate_color_at_frame(cur_period * 10);
+            self.set_led_value(
+                i,
+                (self.brightness_buffer[i] / BRIGHTNESS_INTERP_MUL) as u8,
+                color.r,
+                color.g,
+                color.b,
+            );
         }
         self.spi.send(&self.buffer).await;
     }
 
-    pub async fn run(&mut self, mut receiver: LedReceiver) -> ! {
+    pub async fn run(&mut self, receiver: LedReceiver) -> ! {
         loop {
             let next_tick =
                 (Instant::now().as_ticks() + LED_PERIOD.as_ticks() - 1) / LED_PERIOD.as_ticks() * LED_PERIOD.as_ticks();
@@ -262,11 +304,7 @@ impl<'d, T: spi::Instance, P: gpio::Pin> Leds<'d, T, P> {
                 }
                 select::Either::Second(command) => {
                     // Led command
-                    let owned_command = *command;
-                    receiver.receive_done();
-                    if let Some(cmd) = owned_command {
-                        self.process_command(&cmd).await;
-                    }
+                    self.process_command(&command).await;
                 }
             }
         }

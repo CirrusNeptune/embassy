@@ -9,15 +9,18 @@ mod peripheral_macros;
 mod tca9555;
 mod websocket;
 
+use crate::leds::LedSender;
 use buttons::{button_task, ButtonPeripherals};
 use consts::HA_CONSTS;
 use cyw43_pio::PioSpi;
 use defmt::{debug, info, unwrap};
-use embassy_executor::{Spawner};
+use embassy_executor::{Executor, Spawner};
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Config, DhcpConfig, IpEndpoint, Stack, StackResources};
 use embassy_rp::gpio::{Level, Output};
+use embassy_rp::multicore;
+use embassy_rp::multicore::spawn_core1;
 use embassy_rp::peripherals::{DMA_CH0, I2C0, PIN_23, PIN_25, PIO0};
 use embassy_rp::{bind_interrupts, i2c, pio};
 use embassy_time::Timer;
@@ -45,24 +48,45 @@ async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
 
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
+macro_rules! wifi_peripherals {
+    ($macro_name:ident $(,$arg:tt)*) => {
+        $macro_name!{$($arg,)*
+            WifiPeripherals,
+            pwr: PIN_23,
+            cs: PIN_25,
+            pio: PIO0,
+            dio: PIN_24,
+            clk: PIN_29,
+            dma0: DMA_CH0,
+        }
+    };
+}
 
-    // Start LED task first for immediate feedback
-    let led_channel = leds::make_channel();
-    let (mut led_sender, led_receiver) = led_channel.split();
-    let led_sender2 = led_sender.borrow();
-    unwrap!(spawner.spawn(led_task(led_receiver, led_peripherals!(take_peripheral_set, p))));
+wifi_peripherals!(define_peripheral_set);
 
+#[embassy_executor::task]
+async fn core0_task(
+    spawner: Spawner,
+    wifi_peripherals: WifiPeripherals,
+    button_peripherals: ButtonPeripherals,
+    mut led_sender: LedSender,
+) {
     let fw = include_bytes!("../../../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../../../cyw43-firmware/43439A0_clm.bin");
 
     info!("set up wifi peripherals");
-    let pwr = Output::new(p.PIN_23, Level::Low);
-    let cs = Output::new(p.PIN_25, Level::High);
-    let mut pio = pio::Pio::new(p.PIO0, Irqs);
-    let spi = PioSpi::new(&mut pio.common, pio.sm0, pio.irq0, cs, p.PIN_24, p.PIN_29, p.DMA_CH0);
+    let pwr = Output::new(wifi_peripherals.pwr, Level::Low);
+    let cs = Output::new(wifi_peripherals.cs, Level::High);
+    let mut pio = pio::Pio::new(wifi_peripherals.pio, Irqs);
+    let spi = PioSpi::new(
+        &mut pio.common,
+        pio.sm0,
+        pio.irq0,
+        cs,
+        wifi_peripherals.dio,
+        wifi_peripherals.clk,
+        wifi_peripherals.dma0,
+    );
 
     info!("set up cyw43");
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
@@ -115,16 +139,16 @@ async fn main(spawner: Spawner) {
     stack.wait_config_up().await;
     info!("DHCP is now up!");
 
-    let command_channel = command::make_channel();
-    let (command_sender, mut command_receiver) = command_channel.split();
+    let command_sender = unsafe { command::COMMAND_CHANNEL.sender() };
+    let mut command_receiver = unsafe { command::COMMAND_CHANNEL.receiver() };
 
-    unwrap!(spawner.spawn(button_task(command_sender, led_sender2, button_peripherals!(take_peripheral_set, p))));
+    unwrap!(spawner.spawn(button_task(command_sender, led_sender.clone(), button_peripherals)));
 
     static RX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
     let rx_buffer = RX_BUFFER.init([0; 4096]);
     static TX_BUFFER: StaticCell<[u8; 4096]> = StaticCell::new();
     let tx_buffer = TX_BUFFER.init([0; 4096]);
-    static PAYLOAD_BUFFER: StaticCell<heapless::Vec::<u8, 4096>> = StaticCell::new();
+    static PAYLOAD_BUFFER: StaticCell<heapless::Vec<u8, 4096>> = StaticCell::new();
     let payload_buffer = PAYLOAD_BUFFER.init(heapless::Vec::new());
 
     loop {
@@ -142,4 +166,27 @@ async fn main(spawner: Spawner) {
         debug!("connection dropped, waiting {} seconds", WAIT_SECS);
         Timer::after_secs(WAIT_SECS).await;
     }
+}
+
+#[cortex_m_rt::entry]
+fn main() -> ! {
+    let p = embassy_rp::init(Default::default());
+
+    let led_peripherals = led_peripherals!(take_peripheral_set, p);
+    let button_peripherals = button_peripherals!(take_peripheral_set, p);
+    let wifi_peripherals = wifi_peripherals!(take_peripheral_set, p);
+
+    static mut CORE1_STACK: multicore::Stack<4096> = multicore::Stack::new();
+    spawn_core1(p.CORE1, unsafe { &mut CORE1_STACK }, move || {
+        static EXECUTOR1: StaticCell<Executor> = StaticCell::new();
+        let executor1 = EXECUTOR1.init(Executor::new());
+        let led_receiver = unsafe { leds::LED_CHANNEL.receiver() };
+        executor1.run(|spawner| unwrap!(spawner.spawn(led_task(led_receiver, led_peripherals))));
+    });
+
+    static EXECUTOR0: StaticCell<Executor> = StaticCell::new();
+    let executor0 = EXECUTOR0.init(Executor::new());
+    let led_sender = unsafe { leds::LED_CHANNEL.sender() };
+    executor0
+        .run(|spawner| unwrap!(spawner.spawn(core0_task(spawner, wifi_peripherals, button_peripherals, led_sender))));
 }

@@ -2,8 +2,8 @@ use defmt::{info, unwrap};
 use embassy_rp::{gpio, i2c};
 
 use crate::command::CommandSender;
-use crate::{define_peripheral_set, tca9555, Irqs};
 use crate::leds::LedSender;
+use crate::{define_peripheral_set, tca9555, Irqs};
 
 #[macro_export]
 macro_rules! button_peripherals {
@@ -28,7 +28,12 @@ struct Buttons<'d, T: i2c::Instance, P: gpio::Pin> {
 }
 
 impl<'d, T: i2c::Instance, P: gpio::Pin> Buttons<'d, T, P> {
-    pub fn new(i2c: i2c::I2c<'d, T, i2c::Async>, button_int: gpio::Input<'d, P>, sender: CommandSender, led_sender: LedSender) -> Self {
+    pub fn new(
+        i2c: i2c::I2c<'d, T, i2c::Async>,
+        button_int: gpio::Input<'d, P>,
+        sender: CommandSender,
+        led_sender: LedSender,
+    ) -> Self {
         Self {
             i2c,
             button_int,
