@@ -1,4 +1,4 @@
-use defmt::{assert, debug, info, unwrap};
+use defmt::{assert, info};
 use embassy_futures::select;
 use embassy_rp::{gpio, spi};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -93,13 +93,13 @@ impl LedChannel {
 const CHANNEL_BUF_LEN: usize = 64;
 pub(crate) static mut LED_CHANNEL: LedChannel = LedChannel::new();
 
-struct SpiTx<'d, T: spi::Instance, P: gpio::Pin> {
+struct SpiTx<'d, T: spi::Instance> {
     spi: spi::Spi<'d, T, spi::Async>,
-    cs: gpio::Output<'d, P>,
+    cs: gpio::Output<'d>,
 }
 
-impl<'d, T: spi::Instance, P: gpio::Pin> SpiTx<'d, T, P> {
-    pub fn new(spi: spi::Spi<'d, T, spi::Async>, cs: gpio::Output<'d, P>) -> Self {
+impl<'d, T: spi::Instance> SpiTx<'d, T> {
+    pub fn new(spi: spi::Spi<'d, T, spi::Async>, cs: gpio::Output<'d>) -> Self {
         Self { spi, cs }
     }
 
@@ -210,8 +210,8 @@ impl KeyframeReader {
     }
 }
 
-struct Leds<'d, T: spi::Instance, P: gpio::Pin> {
-    spi: SpiTx<'d, T, P>,
+struct Leds<'d, T: spi::Instance> {
+    spi: SpiTx<'d, T>,
     keyframe_readers: [KeyframeReader; NUM_PADS],
     buffer: [u8; NUM_BUF_BYTES],
     checked_mask: u16,
@@ -223,8 +223,8 @@ const BRIGHTNESS_INTERP_MUL: u32 = 1;
 const BRIGHTNESS_MAX: u32 = 31;
 const BRIGHTNESS_MIN: u32 = 1;
 
-impl<'d, T: spi::Instance, P: gpio::Pin> Leds<'d, T, P> {
-    pub fn new(spi: SpiTx<'d, T, P>) -> Self {
+impl<'d, T: spi::Instance> Leds<'d, T> {
+    pub fn new(spi: SpiTx<'d, T>) -> Self {
         let mut keyframe_readers: [KeyframeReader; NUM_PADS] = [Default::default(); NUM_PADS];
         for i in 0..NUM_PADS {
             if let Some(button_cmd) = BUTTON_COMMANDS.get(i) {

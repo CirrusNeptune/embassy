@@ -20,17 +20,17 @@ macro_rules! button_peripherals {
 
 button_peripherals!(define_peripheral_set);
 
-struct Buttons<'d, T: i2c::Instance, P: gpio::Pin> {
+struct Buttons<'d, T: i2c::Instance> {
     i2c: i2c::I2c<'d, T, i2c::Async>,
-    button_int: gpio::Input<'d, P>,
+    button_int: gpio::Input<'d>,
     sender: CommandSender,
     led_sender: LedSender,
 }
 
-impl<'d, T: i2c::Instance, P: gpio::Pin> Buttons<'d, T, P> {
+impl<'d, T: i2c::Instance> Buttons<'d, T> {
     pub fn new(
         i2c: i2c::I2c<'d, T, i2c::Async>,
-        button_int: gpio::Input<'d, P>,
+        button_int: gpio::Input<'d>,
         sender: CommandSender,
         led_sender: LedSender,
     ) -> Self {
