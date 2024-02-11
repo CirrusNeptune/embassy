@@ -6,8 +6,7 @@ use core::{mem, ptr};
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
-use embassy_time::driver::{AlarmHandle, Driver};
-use embassy_time::TICK_HZ;
+use embassy_time_driver::{AlarmHandle, Driver, TICK_HZ};
 use stm32_metapac::timer::regs;
 
 use crate::interrupt::typelevel::Interrupt;
@@ -15,7 +14,7 @@ use crate::pac::timer::vals;
 use crate::rcc::sealed::RccPeripheral;
 #[cfg(feature = "low-power")]
 use crate::rtc::Rtc;
-use crate::timer::sealed::{Basic16bitInstance as BasicInstance, GeneralPurpose16bitInstance as Instance};
+use crate::timer::sealed::{CoreInstance, GeneralPurpose16bitInstance as Instance};
 use crate::{interrupt, peripherals};
 
 // NOTE regarding ALARM_COUNT:
@@ -29,10 +28,10 @@ use crate::{interrupt, peripherals};
 // available after reserving CC1 for regular time keeping. For example, TIM2 has four CC registers:
 // CC1, CC2, CC3, and CC4, so it can provide ALARM_COUNT = 3.
 
-#[cfg(not(any(time_driver_tim12, time_driver_tim15)))]
+#[cfg(not(any(time_driver_tim12, time_driver_tim15, time_driver_tim21, time_driver_tim22)))]
 const ALARM_COUNT: usize = 3;
 
-#[cfg(any(time_driver_tim12, time_driver_tim15))]
+#[cfg(any(time_driver_tim12, time_driver_tim15, time_driver_tim21, time_driver_tim22))]
 const ALARM_COUNT: usize = 1;
 
 #[cfg(time_driver_tim2)]
@@ -51,6 +50,10 @@ type T = peripherals::TIM11;
 type T = peripherals::TIM12;
 #[cfg(time_driver_tim15)]
 type T = peripherals::TIM15;
+#[cfg(time_driver_tim21)]
+type T = peripherals::TIM21;
+#[cfg(time_driver_tim22)]
+type T = peripherals::TIM22;
 
 foreach_interrupt! {
     (TIM2, timer, $block:ident, UP, $irq:ident) => {
@@ -117,6 +120,22 @@ foreach_interrupt! {
             DRIVER.on_interrupt()
         }
     };
+    (TIM21, timer, $block:ident, UP, $irq:ident) => {
+        #[cfg(time_driver_tim21)]
+        #[cfg(feature = "rt")]
+        #[interrupt]
+        fn $irq() {
+            DRIVER.on_interrupt()
+        }
+    };
+    (TIM22, timer, $block:ident, UP, $irq:ident) => {
+        #[cfg(time_driver_tim22)]
+        #[cfg(feature = "rt")]
+        #[interrupt]
+        fn $irq() {
+            DRIVER.on_interrupt()
+        }
+    };
 }
 
 // Clock timekeeping works with something we call "periods", which are time intervals
@@ -173,7 +192,7 @@ pub(crate) struct RtcDriver {
 
 const ALARM_STATE_NEW: AlarmState = AlarmState::new();
 
-embassy_time::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
+embassy_time_driver::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
     period: AtomicU32::new(0),
     alarm_count: AtomicU8::new(0),
     alarms: Mutex::const_new(CriticalSectionRawMutex::new(), [ALARM_STATE_NEW; ALARM_COUNT]),
@@ -215,8 +234,8 @@ impl RtcDriver {
             w.set_ccie(0, true);
         });
 
-        <T as BasicInstance>::Interrupt::unpend();
-        unsafe { <T as BasicInstance>::Interrupt::enable() };
+        <T as CoreInstance>::Interrupt::unpend();
+        unsafe { <T as CoreInstance>::Interrupt::enable() };
 
         r.cr1().modify(|w| w.set_cen(true));
     }
@@ -232,7 +251,7 @@ impl RtcDriver {
             // Clear all interrupt flags. Bits in SR are "write 0 to clear", so write the bitwise NOT.
             // Other approaches such as writing all zeros, or RMWing won't work, they can
             // miss interrupts.
-            r.sr().write_value(regs::SrGp(!sr.0));
+            r.sr().write_value(regs::SrGp16(!sr.0));
 
             // Overflow
             if sr.uif() {

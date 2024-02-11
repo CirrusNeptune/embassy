@@ -47,6 +47,8 @@ pub enum Error {
 }
 
 const MAX_SEQUENCE_LEN: usize = 32767;
+/// The used pwm clock frequency
+pub const PWM_CLK_HZ: u32 = 16_000_000;
 
 impl<'d, T: Instance> SequencePwm<'d, T> {
     /// Create a new 1-channel PWM
@@ -713,6 +715,13 @@ impl<'d, T: Instance> SimplePwm<'d, T> {
         pwm
     }
 
+    /// Returns the enable state of the pwm counter
+    #[inline(always)]
+    pub fn is_enabled(&self) -> bool {
+        let r = T::regs();
+        r.enable.read().enable().bit_is_set()
+    }
+
     /// Enables the PWM generator.
     #[inline(always)]
     pub fn enable(&self) {
@@ -725,6 +734,11 @@ impl<'d, T: Instance> SimplePwm<'d, T> {
     pub fn disable(&self) {
         let r = T::regs();
         r.enable.write(|w| w.enable().disabled());
+    }
+
+    /// Returns the current duty of the channel
+    pub fn duty(&self, channel: usize) -> u16 {
+        self.duty[channel]
     }
 
     /// Sets duty cycle (15 bit) for a PWM channel.
@@ -746,7 +760,9 @@ impl<'d, T: Instance> SimplePwm<'d, T> {
 
         // defensive wait until waveform is loaded after seqstart so set_duty
         // can't be called again while dma is still reading
-        while r.events_seqend[0].read().bits() == 0 {}
+        if self.is_enabled() {
+            while r.events_seqend[0].read().bits() == 0 {}
+        }
     }
 
     /// Sets the PWM clock prescaler.
@@ -788,7 +804,7 @@ impl<'d, T: Instance> SimplePwm<'d, T> {
     /// Sets the PWM output frequency.
     #[inline(always)]
     pub fn set_period(&self, freq: u32) {
-        let clk = 16_000_000u32 >> (self.prescaler() as u8);
+        let clk = PWM_CLK_HZ >> (self.prescaler() as u8);
         let duty = clk / freq;
         self.set_max_duty(duty.min(32767) as u16);
     }
@@ -796,7 +812,7 @@ impl<'d, T: Instance> SimplePwm<'d, T> {
     /// Returns the PWM output frequency.
     #[inline(always)]
     pub fn period(&self) -> u32 {
-        let clk = 16_000_000u32 >> (self.prescaler() as u8);
+        let clk = PWM_CLK_HZ >> (self.prescaler() as u8);
         let max_duty = self.max_duty() as u32;
         clk / max_duty
     }

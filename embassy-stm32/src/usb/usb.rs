@@ -13,7 +13,6 @@ use embassy_usb_driver::{
 };
 
 use super::{DmPin, DpPin, Instance};
-use crate::gpio::sealed::AFType;
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::usb::regs;
 use crate::pac::usb::vals::{EpType, Stat};
@@ -281,13 +280,18 @@ impl<'d, T: Instance> Driver<'d, T> {
         #[cfg(time)]
         embassy_time::block_for(embassy_time::Duration::from_millis(100));
         #[cfg(not(time))]
-        cortex_m::asm::delay(unsafe { crate::rcc::get_freqs() }.sys.0 / 10);
+        cortex_m::asm::delay(unsafe { crate::rcc::get_freqs() }.sys.unwrap().0 / 10);
 
         #[cfg(not(usb_v4))]
         regs.btable().write(|w| w.set_btable(0));
 
-        dp.set_as_af(dp.af_num(), AFType::OutputPushPull);
-        dm.set_as_af(dm.af_num(), AFType::OutputPushPull);
+        #[cfg(not(stm32l1))]
+        {
+            dp.set_as_af(dp.af_num(), crate::gpio::sealed::AFType::OutputPushPull);
+            dm.set_as_af(dm.af_num(), crate::gpio::sealed::AFType::OutputPushPull);
+        }
+        #[cfg(stm32l1)]
+        let _ = (dp, dm); // suppress "unused" warnings.
 
         // Initialize the bus so that it signals that power is available
         BUS_WAKER.wake();
@@ -443,6 +447,9 @@ impl<'d, T: Instance> driver::Driver<'d> for Driver<'d, T> {
 
         #[cfg(any(usb_v3, usb_v4))]
         regs.bcdr().write(|w| w.set_dppu(true));
+
+        #[cfg(stm32l1)]
+        crate::pac::SYSCFG.pmc().modify(|w| w.set_usb_pu(true));
 
         trace!("enabled");
 
@@ -701,10 +708,10 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, In> {
     }
 
     async fn wait_enabled(&mut self) {
-        trace!("wait_enabled OUT WAITING");
+        trace!("wait_enabled IN WAITING");
         let index = self.info.addr.index();
         poll_fn(|cx| {
-            EP_OUT_WAKERS[index].register(cx.waker());
+            EP_IN_WAKERS[index].register(cx.waker());
             let regs = T::regs();
             if regs.epr(index).read().stat_tx() == Stat::DISABLED {
                 Poll::Pending
@@ -713,7 +720,7 @@ impl<'d, T: Instance> driver::Endpoint for Endpoint<'d, T, In> {
             }
         })
         .await;
-        trace!("wait_enabled OUT OK");
+        trace!("wait_enabled IN OK");
     }
 }
 

@@ -1,5 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(async_fn_in_trait)]
+#![cfg_attr(
+    docsrs,
+    doc = "<div style='padding:30px;background:#810;color:#fff;text-align:center;'><p>You might want to <a href='https://docs.embassy.dev/embassy-stm32'>browse the `embassy-stm32` documentation on the Embassy website</a> instead.</p><p>The documentation here on `docs.rs` is built for a single chip only (STM32H755 in particular), while on the Embassy website you can pick your exact chip from the top menu. Available peripherals and their APIs change depending on the chip.</p></div>\n\n"
+)]
+#![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
 
 //! ## Feature flags
@@ -157,7 +162,7 @@ pub struct Config {
     /// RCC config.
     pub rcc: rcc::Config,
 
-    /// Enable debug during sleep.
+    /// Enable debug during sleep and stop.
     ///
     /// May incrase power consumption. Defaults to true.
     #[cfg(dbgmcu)]
@@ -208,32 +213,30 @@ pub fn init(config: Config) -> Peripherals {
         let p = Peripherals::take_with_cs(cs);
 
         #[cfg(dbgmcu)]
-        if config.enable_debug_during_sleep {
-            crate::pac::DBGMCU.cr().modify(|cr| {
-                #[cfg(any(dbgmcu_f0, dbgmcu_c0, dbgmcu_g0, dbgmcu_u5, dbgmcu_wba))]
-                {
-                    cr.set_dbg_stop(true);
-                    cr.set_dbg_standby(true);
-                }
-                #[cfg(any(
-                    dbgmcu_f1, dbgmcu_f2, dbgmcu_f3, dbgmcu_f4, dbgmcu_f7, dbgmcu_g4, dbgmcu_f7, dbgmcu_l0, dbgmcu_l1,
-                    dbgmcu_l4, dbgmcu_wb, dbgmcu_wl
-                ))]
-                {
-                    cr.set_dbg_sleep(true);
-                    cr.set_dbg_stop(true);
-                    cr.set_dbg_standby(true);
-                }
-                #[cfg(dbgmcu_h7)]
-                {
-                    cr.set_d1dbgcken(true);
-                    cr.set_d3dbgcken(true);
-                    cr.set_dbgsleep_d1(true);
-                    cr.set_dbgstby_d1(true);
-                    cr.set_dbgstop_d1(true);
-                }
-            });
-        }
+        crate::pac::DBGMCU.cr().modify(|cr| {
+            #[cfg(any(dbgmcu_f0, dbgmcu_c0, dbgmcu_g0, dbgmcu_u5, dbgmcu_wba, dbgmcu_l5))]
+            {
+                cr.set_dbg_stop(config.enable_debug_during_sleep);
+                cr.set_dbg_standby(config.enable_debug_during_sleep);
+            }
+            #[cfg(any(
+                dbgmcu_f1, dbgmcu_f2, dbgmcu_f3, dbgmcu_f4, dbgmcu_f7, dbgmcu_g4, dbgmcu_f7, dbgmcu_l0, dbgmcu_l1,
+                dbgmcu_l4, dbgmcu_wb, dbgmcu_wl
+            ))]
+            {
+                cr.set_dbg_sleep(config.enable_debug_during_sleep);
+                cr.set_dbg_stop(config.enable_debug_during_sleep);
+                cr.set_dbg_standby(config.enable_debug_during_sleep);
+            }
+            #[cfg(dbgmcu_h7)]
+            {
+                cr.set_d1dbgcken(config.enable_debug_during_sleep);
+                cr.set_d3dbgcken(config.enable_debug_during_sleep);
+                cr.set_dbgsleep_d1(config.enable_debug_during_sleep);
+                cr.set_dbgstby_d1(config.enable_debug_during_sleep);
+                cr.set_dbgstop_d1(config.enable_debug_during_sleep);
+            }
+        });
 
         #[cfg(not(any(stm32f1, stm32wb, stm32wl)))]
         peripherals::SYSCFG::enable_and_reset_with_cs(cs);

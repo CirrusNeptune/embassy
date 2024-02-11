@@ -10,9 +10,10 @@ use core::task::Poll;
 use embassy_embedded_hal::SetConfig;
 use embassy_hal_internal::{into_ref, PeripheralRef};
 pub use embedded_hal_02::spi::{Mode, Phase, Polarity, MODE_0, MODE_1, MODE_2, MODE_3};
+pub use pac::spim0::config::ORDER_A as BitOrder;
 pub use pac::spim0::frequency::FREQUENCY_A as Frequency;
 
-use crate::chip::FORCE_COPY_BUFFER_SIZE;
+use crate::chip::{EASY_DMA_SIZE, FORCE_COPY_BUFFER_SIZE};
 use crate::gpio::sealed::Pin as _;
 use crate::gpio::{self, AnyPin, Pin as GpioPin, PselBits};
 use crate::interrupt::typelevel::Interrupt;
@@ -24,9 +25,9 @@ use crate::{interrupt, pac, Peripheral};
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Error {
-    /// TX buffer was too long.
+    /// Supplied TX buffer overflows EasyDMA transmit buffer
     TxBufferTooLong,
-    /// RX buffer was too long.
+    /// Supplied RX buffer overflows EasyDMA receive buffer
     RxBufferTooLong,
     /// EasyDMA can only read from data memory, read only buffers in flash will fail.
     BufferNotInRAM,
@@ -41,6 +42,9 @@ pub struct Config {
     /// SPI mode
     pub mode: Mode,
 
+    /// Bit order
+    pub bit_order: BitOrder,
+
     /// Overread character.
     ///
     /// When doing bidirectional transfers, if the TX buffer is shorter than the RX buffer,
@@ -53,6 +57,7 @@ impl Default for Config {
         Self {
             frequency: Frequency::M1,
             mode: MODE_0,
+            bit_order: BitOrder::MSB_FIRST,
             orc: 0x00,
         }
     }
@@ -99,7 +104,7 @@ impl<'d, T: Instance> Spim<'d, T> {
         into_ref!(sck, miso, mosi);
         Self::new_inner(
             spim,
-            sck.map_into(),
+            Some(sck.map_into()),
             Some(miso.map_into()),
             Some(mosi.map_into()),
             config,
@@ -115,7 +120,7 @@ impl<'d, T: Instance> Spim<'d, T> {
         config: Config,
     ) -> Self {
         into_ref!(sck, mosi);
-        Self::new_inner(spim, sck.map_into(), None, Some(mosi.map_into()), config)
+        Self::new_inner(spim, Some(sck.map_into()), None, Some(mosi.map_into()), config)
     }
 
     /// Create a new SPIM driver, capable of RX only (MISO only).
@@ -127,12 +132,23 @@ impl<'d, T: Instance> Spim<'d, T> {
         config: Config,
     ) -> Self {
         into_ref!(sck, miso);
-        Self::new_inner(spim, sck.map_into(), Some(miso.map_into()), None, config)
+        Self::new_inner(spim, Some(sck.map_into()), Some(miso.map_into()), None, config)
+    }
+
+    /// Create a new SPIM driver, capable of TX only (MOSI only), without SCK pin.
+    pub fn new_txonly_nosck(
+        spim: impl Peripheral<P = T> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        mosi: impl Peripheral<P = impl GpioPin> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(mosi);
+        Self::new_inner(spim, None, None, Some(mosi.map_into()), config)
     }
 
     fn new_inner(
         spim: impl Peripheral<P = T> + 'd,
-        sck: PeripheralRef<'d, AnyPin>,
+        sck: Option<PeripheralRef<'d, AnyPin>>,
         miso: Option<PeripheralRef<'d, AnyPin>>,
         mosi: Option<PeripheralRef<'d, AnyPin>>,
         config: Config,
@@ -142,7 +158,9 @@ impl<'d, T: Instance> Spim<'d, T> {
         let r = T::regs();
 
         // Configure pins
-        sck.conf().write(|w| w.dir().output().drive().h0h1());
+        if let Some(sck) = &sck {
+            sck.conf().write(|w| w.dir().output().drive().h0h1());
+        }
         if let Some(mosi) = &mosi {
             mosi.conf().write(|w| w.dir().output().drive().h0h1());
         }
@@ -152,13 +170,17 @@ impl<'d, T: Instance> Spim<'d, T> {
 
         match config.mode.polarity {
             Polarity::IdleHigh => {
-                sck.set_high();
+                if let Some(sck) = &sck {
+                    sck.set_high();
+                }
                 if let Some(mosi) = &mosi {
                     mosi.set_high();
                 }
             }
             Polarity::IdleLow => {
-                sck.set_low();
+                if let Some(sck) = &sck {
+                    sck.set_low();
+                }
                 if let Some(mosi) = &mosi {
                     mosi.set_low();
                 }
@@ -198,11 +220,19 @@ impl<'d, T: Instance> Spim<'d, T> {
 
         // Set up the DMA write.
         let (ptr, tx_len) = slice_ptr_parts(tx);
+        if tx_len > EASY_DMA_SIZE {
+            return Err(Error::TxBufferTooLong);
+        }
+
         r.txd.ptr.write(|w| unsafe { w.ptr().bits(ptr as _) });
         r.txd.maxcnt.write(|w| unsafe { w.maxcnt().bits(tx_len as _) });
 
         // Set up the DMA read.
         let (ptr, rx_len) = slice_ptr_parts_mut(rx);
+        if rx_len > EASY_DMA_SIZE {
+            return Err(Error::RxBufferTooLong);
+        }
+
         r.rxd.ptr.write(|w| unsafe { w.ptr().bits(ptr as _) });
         r.rxd.maxcnt.write(|w| unsafe { w.maxcnt().bits(rx_len as _) });
 
@@ -563,22 +593,22 @@ impl<'d, T: Instance> SetConfig for Spim<'d, T> {
         r.config.write(|w| {
             match mode {
                 MODE_0 => {
-                    w.order().msb_first();
+                    w.order().variant(config.bit_order);
                     w.cpol().active_high();
                     w.cpha().leading();
                 }
                 MODE_1 => {
-                    w.order().msb_first();
+                    w.order().variant(config.bit_order);
                     w.cpol().active_high();
                     w.cpha().trailing();
                 }
                 MODE_2 => {
-                    w.order().msb_first();
+                    w.order().variant(config.bit_order);
                     w.cpol().active_low();
                     w.cpha().leading();
                 }
                 MODE_3 => {
-                    w.order().msb_first();
+                    w.order().variant(config.bit_order);
                     w.cpol().active_low();
                     w.cpha().trailing();
                 }

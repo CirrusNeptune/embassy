@@ -1,7 +1,6 @@
 pub use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Msirange, Plldiv, Pllm, Plln, Ppre as APBPrescaler};
 use crate::pac::rcc::vals::{Msirgsel, Pllmboost, Pllrge, Pllsrc, Sw};
 use crate::pac::{FLASH, PWR, RCC};
-use crate::rcc::{set_freqs, Clocks};
 use crate::time::Hertz;
 
 /// HSI speed
@@ -45,6 +44,16 @@ pub struct PllConfig {
     /// The multiplied clock – `source` divided by `m` times `n` – must be between 128 and 544
     /// MHz. The upper limit may be lower depending on the `Config { voltage_range }`.
     pub n: Plln,
+    /// The divider for the P output.
+    ///
+    /// The P output is one of several options
+    /// that can be used to feed the SAI/MDF/ADF Clock mux's.
+    pub p: Plldiv,
+    /// The divider for the Q output.
+    ///
+    /// The Q ouput is one of severals options that can be used to feed the 48MHz clocks
+    /// and the OCTOSPI clock. It may also be used on the MDF/ADF clock mux's.
+    pub q: Plldiv,
     /// The divider for the R output.
     ///
     /// When used to drive the system clock, `source` divided by `m` times `n` divided by `r`
@@ -60,6 +69,8 @@ impl PllConfig {
             source: PllSource::HSI,
             m: Pllm::DIV1,
             n: Plln::MUL10,
+            p: Plldiv::DIV3,
+            q: Plldiv::DIV2,
             r: Plldiv::DIV1,
         }
     }
@@ -70,6 +81,8 @@ impl PllConfig {
             source: PllSource::MSIS(Msirange::RANGE_48MHZ),
             m: Pllm::DIV3,
             n: Plln::MUL10,
+            p: Plldiv::DIV3,
+            q: Plldiv::DIV2,
             r: Plldiv::DIV1,
         }
     }
@@ -301,6 +314,8 @@ pub(crate) unsafe fn init(config: Config) {
             RCC.pll1divr().modify(|w| {
                 // Set the VCO multiplier
                 w.set_plln(pll.n);
+                w.set_pllp(pll.p);
+                w.set_pllq(pll.q);
                 // Set the R output divisor
                 w.set_pllr(pll.r);
             });
@@ -322,7 +337,7 @@ pub(crate) unsafe fn init(config: Config) {
         }
     };
 
-    let _hsi48 = config.hsi48.map(super::init_hsi48);
+    let hsi48 = config.hsi48.map(super::init_hsi48);
 
     // The clock source is ready
     // Calculate and set the flash wait states
@@ -432,18 +447,38 @@ pub(crate) unsafe fn init(config: Config) {
 
     let rtc = config.ls.init();
 
-    set_freqs(Clocks {
-        sys: sys_clk,
-        hclk1: ahb_freq,
-        hclk2: ahb_freq,
-        hclk3: ahb_freq,
-        pclk1: apb1_freq,
-        pclk2: apb2_freq,
-        pclk3: apb3_freq,
-        pclk1_tim: apb1_tim_freq,
-        pclk2_tim: apb2_tim_freq,
-        rtc,
-    });
+    set_clocks!(
+        sys: Some(sys_clk),
+        hclk1: Some(ahb_freq),
+        hclk2: Some(ahb_freq),
+        hclk3: Some(ahb_freq),
+        pclk1: Some(apb1_freq),
+        pclk2: Some(apb2_freq),
+        pclk3: Some(apb3_freq),
+        pclk1_tim: Some(apb1_tim_freq),
+        pclk2_tim: Some(apb2_tim_freq),
+        hsi48: hsi48,
+        rtc: rtc,
+
+        // TODO
+        hse: None,
+        hsi: None,
+        audioclk: None,
+        hsi48_div_2: None,
+        lse: None,
+        lsi: None,
+        msik: None,
+        pll1_p: None,
+        pll1_q: None,
+        pll1_r: None,
+        pll2_p: None,
+        pll2_q: None,
+        pll2_r: None,
+        pll3_p: None,
+        pll3_q: None,
+        pll3_r: None,
+        iclk: None,
+    );
 }
 
 fn msirange_to_hertz(range: Msirange) -> Hertz {
