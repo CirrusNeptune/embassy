@@ -11,8 +11,29 @@ pub struct HaCommandSetEffect {
 }
 
 #[derive(Copy, Clone)]
+pub struct HaCommandTurnOff {
+    pub entity_name: &'static str,
+}
+
+#[derive(Copy, Clone)]
+pub struct HaCommandPlayPause {
+    pub entity_name: &'static str,
+}
+
+#[derive(Copy, Clone)]
 pub enum HaCommand {
     SetEffect(HaCommandSetEffect),
+    TurnOff(HaCommandTurnOff),
+    PlayPause(HaCommandPlayPause),
+}
+
+impl HaCommand {
+    pub fn led_latch(&self) -> bool {
+        match self {
+            HaCommand::SetEffect(_) | HaCommand::TurnOff(_) => true,
+            _ => false
+        }
+    }
 }
 
 pub struct HaButtonCommand {
@@ -324,9 +345,8 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
             frame: 0,
             color: Color { r: 30, g: 30, b: 133 },
         }],
-        command: HaCommand::SetEffect(HaCommandSetEffect {
+        command: HaCommand::TurnOff(HaCommandTurnOff {
             entity_name: consts::DESK_STRIP_ENTITY,
-            effect_name: "TV time",
         }),
     },
     HaButtonCommand {
@@ -348,9 +368,8 @@ pub const BUTTON_COMMANDS: [HaButtonCommand; 16] = [
                 color: Color { r: 3, g: 2, b: 133 },
             },
         ],
-        command: HaCommand::SetEffect(HaCommandSetEffect {
-            entity_name: consts::DESK_STRIP_ENTITY,
-            effect_name: "Deepdive",
+        command: HaCommand::PlayPause(HaCommandPlayPause {
+            entity_name: consts::ANDROID_TV_ENTITY,
         }),
     },
 ];

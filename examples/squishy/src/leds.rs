@@ -9,6 +9,7 @@ use crate::command::{HaCommand, BUTTON_COMMANDS};
 use crate::{consts, define_peripheral_set};
 
 const LED_PERIOD: Duration = Duration::from_millis(20); // 50 Hz
+const SLEEP_TIMEOUT_PERIOD: Duration = Duration::from_secs(30);
 
 #[macro_export]
 macro_rules! led_peripherals {
@@ -67,6 +68,14 @@ impl LedSender {
         } else {
             self.set_button_checked_mask(0);
         }
+    }
+
+    pub fn on_turn_off(&mut self, entity_name: &str) {
+        if entity_name != consts::DESK_STRIP_ENTITY {
+            return;
+        }
+
+        self.set_button_checked_mask(0);
     }
 
     pub fn on_button_pressed(&mut self, i: usize) {
@@ -215,8 +224,12 @@ struct Leds<'d, T: spi::Instance> {
     keyframe_readers: [KeyframeReader; NUM_PADS],
     buffer: [u8; NUM_BUF_BYTES],
     checked_mask: u16,
+    latch_mask: u16,
     brightness_buffer: [u32; NUM_PADS],
     last_period: u64,
+    next_sleep_tick: Instant,
+    sleep_pending: bool,
+    sleeping: bool,
 }
 
 const BRIGHTNESS_INTERP_MUL: u32 = 1;
@@ -226,9 +239,11 @@ const BRIGHTNESS_MIN: u32 = 1;
 impl<'d, T: spi::Instance> Leds<'d, T> {
     pub fn new(spi: SpiTx<'d, T>) -> Self {
         let mut keyframe_readers: [KeyframeReader; NUM_PADS] = [Default::default(); NUM_PADS];
+        let mut latch_mask = 0;
         for i in 0..NUM_PADS {
             if let Some(button_cmd) = BUTTON_COMMANDS.get(i) {
                 keyframe_readers[i].set_keyframes(button_cmd.keyframes);
+                latch_mask |= if button_cmd.command.led_latch() { 1 << i } else { 0 };
             }
         }
 
@@ -237,8 +252,12 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
             keyframe_readers,
             buffer: [0_u8; NUM_BUF_BYTES],
             checked_mask: 0,
+            latch_mask,
             brightness_buffer: [BRIGHTNESS_MAX * BRIGHTNESS_INTERP_MUL; NUM_PADS],
             last_period: 0,
+            next_sleep_tick: Instant::MAX,
+            sleep_pending: false,
+            sleeping: false,
         }
     }
 
@@ -249,6 +268,7 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
             }
             LedCommand::OrButtonCheckedMask(mask) => {
                 self.checked_mask |= *mask;
+                self.touch_sleep_timer();
             }
             _ => {}
         }
@@ -262,7 +282,13 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
         self.buffer[i * 4 + 7] = r;
     }
 
-    pub async fn tick(&mut self) {
+    pub fn touch_sleep_timer(&mut self) {
+        self.next_sleep_tick = Instant::now() + SLEEP_TIMEOUT_PERIOD;
+        self.sleep_pending = false;
+        self.sleeping = false;
+    }
+
+    pub async fn tick(&mut self) -> bool {
         let cur_period = Instant::now().as_ticks() / LED_PERIOD.as_ticks();
         let delta = if self.last_period != 0 {
             cur_period - self.last_period
@@ -271,15 +297,18 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
         } as u32;
         self.last_period = cur_period;
 
+        let mut all_brightness_bits = 0;
         for i in 0..NUM_PADS {
             let checked = ((1 << i) & self.checked_mask) != 0;
-            if checked {
+            let brightness_min = if self.sleep_pending { 0 } else { BRIGHTNESS_MIN };
+            if checked && !self.sleep_pending {
                 self.brightness_buffer[i] = BRIGHTNESS_MAX * BRIGHTNESS_INTERP_MUL;
             } else {
                 self.brightness_buffer[i] = self.brightness_buffer[i]
                     .saturating_sub(delta)
-                    .max(BRIGHTNESS_MIN * BRIGHTNESS_INTERP_MUL);
+                    .max(brightness_min * BRIGHTNESS_INTERP_MUL);
             }
+            all_brightness_bits |= self.brightness_buffer[i];
 
             let color = self.keyframe_readers[i].evaluate_color_at_frame(cur_period * 10);
             self.set_led_value(
@@ -290,22 +319,40 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
                 color.b,
             );
         }
+
+        // Auto-clear according to latch mask after one update.
+        self.checked_mask &= self.latch_mask;
+
         self.spi.send(&self.buffer).await;
+        all_brightness_bits != 0
     }
 
     pub async fn run(&mut self, receiver: LedReceiver) -> ! {
+        self.touch_sleep_timer();
         loop {
-            let next_tick =
-                (Instant::now().as_ticks() + LED_PERIOD.as_ticks() - 1) / LED_PERIOD.as_ticks() * LED_PERIOD.as_ticks();
-            match select::select(Timer::at(Instant::from_ticks(next_tick)), receiver.receive()).await {
-                select::Either::First(_) => {
-                    // Update timer has expired
-                    self.tick().await;
+            if !self.sleeping {
+                let next_tick =
+                    (Instant::now().as_ticks() + LED_PERIOD.as_ticks() - 1) / LED_PERIOD.as_ticks() * LED_PERIOD.as_ticks();
+                match select::select3(Timer::at(Instant::from_ticks(next_tick)), Timer::at(self.next_sleep_tick), receiver.receive()).await {
+                    select::Either3::First(_) => {
+                        // Update timer has expired
+                        if !self.tick().await && self.sleep_pending {
+                            self.sleeping = true;
+                        }
+                    }
+                    select::Either3::Second(_) => {
+                        // Sleep timer has expired
+                        self.sleep_pending = true;
+                    }
+                    select::Either3::Third(command) => {
+                        // Led command
+                        self.process_command(&command).await;
+                    }
                 }
-                select::Either::Second(command) => {
-                    // Led command
-                    self.process_command(&command).await;
-                }
+            } else {
+                // Led command during sleep
+                let command = receiver.receive().await;
+                self.process_command(&command).await;
             }
         }
     }

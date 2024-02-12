@@ -271,13 +271,19 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
     );
     make_send_function_1parm!(
         send_turn_off,
-        "sending turn on",
+        "sending turn off",
         r#"{{"type":"call_service","domain":"light","service":"turn_off","service_data":{{"entity_id":"{}"}},"id":{}}}"#
     );
     make_send_function_2parm!(
         send_set_effect,
         "sending set effect",
         r#"{{"type":"call_service","domain":"light","service":"turn_on","service_data":{{"entity_id":"{}","effect":"{}"}},"id":{}}}"#
+    );
+
+    make_send_function_1parm!(
+        send_play_pause,
+        "sending play pause",
+        r#"{{"type":"call_service","domain":"media_player","service":"media_play_pause","service_data":{{"entity_id":"{}"}},"id":{}}}"#
     );
 
     async fn connect_socket<T: Into<IpEndpoint>>(&mut self, endpoint: T, hostname: &str) -> Result<(), Error> {
@@ -313,7 +319,7 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
     }
 
     fn try_to_parse_state(led_sender: &mut LedSender, str: &str) {
-        let mut parsed: Option<(&str, &str)> = None;
+        let mut parsed: Option<(&str, Option<&str>)> = None;
         let mut try_parse_effect = |name_start: usize| {
             if let Some(mut name_end) = str[name_start..].find('"') {
                 name_end += name_start;
@@ -324,8 +330,10 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
                     if let Some(mut effect_end) = str[effect_start..].find('"') {
                         effect_end += effect_start;
                         let effect_name = &str[effect_start..effect_end];
-                        parsed = Some((entity_name, effect_name))
+                        parsed = Some((entity_name, Some(effect_name)))
                     }
+                } else if let Some(_) = str[name_end..].find(r#""state":"off""#) {
+                    parsed = Some((entity_name, None))
                 }
             }
         };
@@ -339,7 +347,11 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
         if let Some((entity_name, effect_name)) = parsed {
             debug!("parsed state change {} {}", entity_name, effect_name);
             if ENTITIES_TO_SUBSCRIBE.contains(&entity_name) {
-                led_sender.on_effect_changed(entity_name, effect_name);
+                if let Some(effect_name_str) = effect_name {
+                    led_sender.on_effect_changed(entity_name, effect_name_str);
+                } else {
+                    led_sender.on_turn_off(entity_name);
+                }
             }
         }
     }
@@ -402,10 +414,15 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
 
     async fn send_command(&mut self, command: &HaCommand) -> Result<(), Error> {
         match command {
-            HaCommand::SetEffect(effect) => {
-                self.send_set_effect(effect.entity_name, effect.effect_name).await?;
+            HaCommand::SetEffect(cmd) => {
+                self.send_set_effect(cmd.entity_name, cmd.effect_name).await?;
             }
-            _ => {}
+            HaCommand::TurnOff(cmd) => {
+                self.send_turn_off(cmd.entity_name).await?;
+            }
+            HaCommand::PlayPause(cmd) => {
+                self.send_play_pause(cmd.entity_name).await?;
+            }
         }
         Ok(())
     }

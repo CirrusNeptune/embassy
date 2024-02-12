@@ -19,3 +19,5 @@ pub const HA_CONSTS: HaEndpointConsts = HaEndpointConsts {
 };
 
 pub const DESK_STRIP_ENTITY: &str = "light.wiz_rgbww_tunable_726ed4";
+
+pub const ANDROID_TV_ENTITY: &str = "media_player.android_tv_10_0_0_43";
