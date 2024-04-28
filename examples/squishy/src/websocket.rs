@@ -287,7 +287,7 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
     );
 
     async fn connect_socket<T: Into<IpEndpoint>>(&mut self, endpoint: T, hostname: &str) -> Result<(), Error> {
-        unwrap!(self.socket.connect(endpoint).await);
+        self.socket.connect(endpoint).await.map_err(|e| Error::ConnectionReset)?;
 
         debug!("sending request");
         self.socket
@@ -482,11 +482,12 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
                 payload_len: 2,
                 mask_key: None,
             };
-            CLOSE_HEADER.send(&mut self.socket).await.unwrap();
-            CLOSE_HEADER
-                .send_payload(&mut self.socket, &1000_u16.to_be_bytes())
-                .await
-                .unwrap();
+            if CLOSE_HEADER.send(&mut self.socket).await.is_ok() {
+                CLOSE_HEADER
+                    .send_payload(&mut self.socket, &1000_u16.to_be_bytes())
+                    .await
+                    .ok();
+            }
         }
         self.socket.close();
         loop {
