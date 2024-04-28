@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use defmt::{assert, debug, unwrap};
 use edge_ws::FrameHeader;
 use embassy_futures::select;
@@ -138,38 +140,6 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
         Ok(())
     }
 
-    async fn read_ws_frame_header(&mut self) -> Result<FrameHeader, Error> {
-        let mut header_buf = heapless::Vec::<u8, { FrameHeader::MAX_LEN }>::new();
-        loop {
-            if let Some(header) = self
-                .socket
-                .read_with(|bytes_mut| {
-                    let bytes: &[u8] = bytes_mut;
-                    let (deserialize_bytes, start_header_buf_len) = if !header_buf.is_empty() {
-                        let start_header_buf_len = header_buf.len();
-                        unwrap!(header_buf.extend_from_slice(bytes));
-                        (header_buf.as_slice(), start_header_buf_len)
-                    } else {
-                        (bytes, 0_usize)
-                    };
-                    match FrameHeader::deserialize(&deserialize_bytes) {
-                        Ok((header, payload_offset)) => (payload_offset - start_header_buf_len, Some(header)),
-                        Err(edge_ws::Error::Incomplete(_)) => {
-                            unwrap!(header_buf.extend_from_slice(bytes));
-                            (bytes.len(), None)
-                        }
-                        _ => {
-                            panic!("invalid ws header")
-                        }
-                    }
-                })
-                .await?
-            {
-                return Ok(header);
-            }
-        }
-    }
-
     async fn read_ws_payload(&mut self, header: &FrameHeader) -> Result<ReadWsOk, Error> {
         self.payload_buffer.clear();
         let payload_len = header.payload_len as usize;
@@ -287,7 +257,7 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
     );
 
     async fn connect_socket<T: Into<IpEndpoint>>(&mut self, endpoint: T, hostname: &str) -> Result<(), Error> {
-        self.socket.connect(endpoint).await.map_err(|e| Error::ConnectionReset)?;
+        self.socket.connect(endpoint).await.map_err(|_| Error::ConnectionReset)?;
 
         debug!("sending request");
         self.socket

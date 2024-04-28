@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::{Channel, Receiver, Sender};
 

@@ -29,8 +29,6 @@ led_peripherals!(define_peripheral_set);
 
 #[derive(Copy, Clone)]
 pub enum LedCommand {
-    DisconnectState,
-    ConnectState,
     SetButtonCheckedMask(u16),
     OrButtonCheckedMask(u16),
 }
@@ -270,7 +268,6 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
                 self.checked_mask |= *mask;
                 self.touch_sleep_timer();
             }
-            _ => {}
         }
     }
 
