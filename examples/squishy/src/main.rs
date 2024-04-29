@@ -28,8 +28,8 @@ use leds::{led_task, LedPeripherals};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-const WIFI_NETWORK: &str = "JAMzzz";
-const WIFI_PASSWORD: &str = include_str!("../wifi_password.txt");
+const WIFI_SSID: &str = include_str!("../wifi_ssid.txt");
+const WIFI_PSK: &[u8; 32] = include_bytes!("../wifi_psk.bin");
 
 bind_interrupts!(struct Irqs {
     I2C0_IRQ => i2c::InterruptHandler<I2C0>;
@@ -37,9 +37,7 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::task]
-async fn wifi_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
+async fn wifi_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>) -> ! {
     runner.run().await
 }
 
@@ -126,7 +124,7 @@ async fn core0_task(
 
     loop {
         //control.join_open(WIFI_NETWORK).await;
-        match control.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
+        match control.join_wpa2_psk(WIFI_SSID, WIFI_PSK).await {
             Ok(_) => break,
             Err(err) => {
                 info!("join failed with status={}", err.status);

@@ -33,7 +33,7 @@ impl HaCommand {
     pub fn led_latch(&self) -> bool {
         match self {
             HaCommand::SetEffect(_) | HaCommand::TurnOff(_) => true,
-            _ => false
+            _ => false,
         }
     }
 }

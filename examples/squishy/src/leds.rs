@@ -147,7 +147,13 @@ struct KeyframeReader {
 impl Default for KeyframeReader {
     fn default() -> Self {
         static DEFAULT_KEYFRAMES: [Keyframe; 0] = [];
-        Self { keyframes: &DEFAULT_KEYFRAMES, last_frame: 0, frame_a: 0, frame_b: 0, ib: 1 }
+        Self {
+            keyframes: &DEFAULT_KEYFRAMES,
+            last_frame: 0,
+            frame_a: 0,
+            frame_b: 0,
+            ib: 1,
+        }
     }
 }
 
@@ -155,17 +161,9 @@ impl KeyframeReader {
     pub fn set_keyframes(&mut self, keyframes: &'static [Keyframe]) {
         self.keyframes = keyframes;
 
-        self.last_frame = if let Some(kf) = keyframes.last() {
-            kf.frame
-        } else {
-            0
-        };
+        self.last_frame = if let Some(kf) = keyframes.last() { kf.frame } else { 0 };
 
-        self.frame_a = if let Some(kf) = keyframes.get(0) {
-            kf.frame
-        } else {
-            0
-        };
+        self.frame_a = if let Some(kf) = keyframes.get(0) { kf.frame } else { 0 };
 
         self.frame_b = if let Some(kf) = keyframes.get(1) {
             kf.frame
@@ -328,9 +326,15 @@ impl<'d, T: spi::Instance> Leds<'d, T> {
         self.touch_sleep_timer();
         loop {
             if !self.sleeping {
-                let next_tick =
-                    (Instant::now().as_ticks() + LED_PERIOD.as_ticks() - 1) / LED_PERIOD.as_ticks() * LED_PERIOD.as_ticks();
-                match select::select3(Timer::at(Instant::from_ticks(next_tick)), Timer::at(self.next_sleep_tick), receiver.receive()).await {
+                let next_tick = (Instant::now().as_ticks() + LED_PERIOD.as_ticks() - 1) / LED_PERIOD.as_ticks()
+                    * LED_PERIOD.as_ticks();
+                match select::select3(
+                    Timer::at(Instant::from_ticks(next_tick)),
+                    Timer::at(self.next_sleep_tick),
+                    receiver.receive(),
+                )
+                .await
+                {
                     select::Either3::First(_) => {
                         // Update timer has expired
                         if !self.tick().await && self.sleep_pending {

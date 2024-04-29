@@ -257,7 +257,10 @@ impl<'a, const PAYLOAD_BUF_LEN: usize> Websocket<'a, PAYLOAD_BUF_LEN> {
     );
 
     async fn connect_socket<T: Into<IpEndpoint>>(&mut self, endpoint: T, hostname: &str) -> Result<(), Error> {
-        self.socket.connect(endpoint).await.map_err(|_| Error::ConnectionReset)?;
+        self.socket
+            .connect(endpoint)
+            .await
+            .map_err(|_| Error::ConnectionReset)?;
 
         debug!("sending request");
         self.socket
