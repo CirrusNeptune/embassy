@@ -138,6 +138,29 @@ impl<'a> UdpSocket<'a> {
         })
     }
 
+    /// Receive a datagram with a zero-copy function.
+    pub async fn recv_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&[u8], UdpMetadata) -> R,
+    {
+        let mut f = Some(f);
+        poll_fn(move |cx| {
+            self.with_mut(|s, _| {
+                match s.recv() {
+                    Ok((buffer, endpoint)) => {
+                        Poll::Ready(unwrap!(f.take())(buffer, endpoint))
+                    }
+                    Err(_) => {
+                        // socket buffer is empty wait until it has atleast one byte has arrived
+                        s.register_recv_waker(cx.waker());
+                        Poll::Pending
+                    }
+                }
+            })
+        })
+        .await
+    }
+
     /// Send a datagram to the specified remote endpoint.
     ///
     /// This method will wait until the datagram has been sent.
@@ -179,6 +202,37 @@ impl<'a> UdpSocket<'a> {
                 }
             }
         })
+    }
+
+    /// Send a datagram with a zero-copy function.
+    pub async fn send_with<T, F, R>(&mut self, size: usize, remote_endpoint: T, f: F) -> Result<R, SendError>
+    where
+        T: Into<UdpMetadata> + Copy,
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let mut f = Some(f);
+        poll_fn(move |cx| {
+            self.with_mut(|s, _| {
+                match s.send(size, remote_endpoint) {
+                    Ok(buffer) => {
+                        Poll::Ready(Ok(unwrap!(f.take())(buffer)))
+                    }
+                    Err(udp::SendError::BufferFull) => {
+                        s.register_send_waker(cx.waker());
+                        Poll::Pending
+                    }
+                    Err(udp::SendError::Unaddressable) => {
+                        // If no sender/outgoing port is specified, there is not really "no route"
+                        if s.endpoint().port == 0 {
+                            Poll::Ready(Err(SendError::SocketNotBound))
+                        } else {
+                            Poll::Ready(Err(SendError::NoRoute))
+                        }
+                    }
+                }
+            })
+        })
+        .await
     }
 
     /// Returns the local endpoint of the socket.
