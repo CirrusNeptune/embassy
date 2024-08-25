@@ -131,10 +131,10 @@ fn on_cmd_datagram_received(mut buffer: &[u8], endpoint: UdpMetadata) {
 pub async fn run<'a>(cmd_socket: &mut UdpSocket<'a>, discover_socket: &mut UdpSocket<'a>, mac: &[u8; 6]) -> ! {
     loop {
         match select::select(
-            cmd_socket.recv_with(|buffer, endpoint| {
+            cmd_socket.recv_from_with(|buffer, endpoint| {
                 on_cmd_datagram_received(buffer, endpoint);
             }),
-            discover_socket.recv_with(|buffer, endpoint| {
+            discover_socket.recv_from_with(|buffer, endpoint| {
                 if buffer == "mow sconce discover".as_bytes() {
                     debug!("Received valid discover packet from {}", endpoint);
                     Some(endpoint)
@@ -149,9 +149,7 @@ pub async fn run<'a>(cmd_socket: &mut UdpSocket<'a>, discover_socket: &mut UdpSo
                 let mut reply = heapless::String::<36>::new();
                 uwrite!(reply, "mow sconce reply: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]).unwrap();
-                discover_socket.send_with(reply.len(), endpoint, |buffer| {
-                    buffer.copy_from_slice(reply.as_bytes());
-                }).await.ok();
+                discover_socket.send_to(reply.as_bytes(), endpoint).await.ok();
             }
             _ => {}
         }
