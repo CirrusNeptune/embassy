@@ -302,7 +302,14 @@ impl<'d, T: Instance, const FLASH_SIZE: usize> Flash<'d, T, Async, FLASH_SIZE> {
         // pac::XIP_CTRL.stream_fifo().as_ptr()) to avoid DMA stalling on
         // general XIP access.
         const XIP_AUX_BASE: *const u32 = 0x50400000 as *const _;
-        let transfer = unsafe { crate::dma::read(self.dma.as_mut().unwrap(), XIP_AUX_BASE, data, 37) };
+        let transfer = unsafe {
+            crate::dma::read(
+                self.dma.as_mut().unwrap(),
+                XIP_AUX_BASE,
+                data,
+                pac::dma::vals::TreqSel::XIP_STREAM,
+            )
+        };
 
         Ok(BackgroundRead {
             flash: PhantomData,
@@ -373,6 +380,11 @@ impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> ReadNorFlash for Flash<'
 }
 
 impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> MultiwriteNorFlash for Flash<'d, T, M, FLASH_SIZE> {}
+
+impl<'d, T: Instance, const FLASH_SIZE: usize> embedded_storage_async::nor_flash::MultiwriteNorFlash
+    for Flash<'d, T, Async, FLASH_SIZE>
+{
+}
 
 impl<'d, T: Instance, M: Mode, const FLASH_SIZE: usize> NorFlash for Flash<'d, T, M, FLASH_SIZE> {
     const WRITE_SIZE: usize = WRITE_SIZE;
@@ -592,6 +604,7 @@ mod ram_helpers {
     /// addr must be aligned to 4096
     #[inline(never)]
     #[link_section = ".data.ram_func"]
+    #[cfg(feature = "rp2040")]
     unsafe fn write_flash_inner(addr: u32, len: u32, data: Option<&[u8]>, ptrs: *const FlashFunctionPointers) {
         /*
          Should be equivalent to:
@@ -620,18 +633,18 @@ mod ram_helpers {
             "movs r3, #0", // r3 = 0
             "ldr r4, [{ptrs}, #8]",
             "cmp r4, #0",
-            "beq 1f",
+            "beq 2f",
             "blx r4", // flash_range_erase(addr, len, 1 << 31, 0)
-            "1:",
+            "2:",
 
             "mov r0, r8", // r0 = addr
             "mov r1, r9", // r0 = data
             "mov r2, r10", // r2 = len
             "ldr r4, [{ptrs}, #12]",
             "cmp r4, #0",
-            "beq 1f",
+            "beq 2f",
             "blx r4", // flash_range_program(addr, data, len);
-            "1:",
+            "2:",
 
             "ldr r4, [{ptrs}, #16]",
             "blx r4", // flash_flush_cache();
@@ -652,6 +665,13 @@ mod ram_helpers {
             lateout("r10") _,
             clobber_abi("C"),
         );
+    }
+
+    #[inline(never)]
+    #[link_section = ".data.ram_func"]
+    #[cfg(feature = "_rp235x")]
+    unsafe fn write_flash_inner(_addr: u32, _len: u32, _data: Option<&[u8]>, _ptrs: *const FlashFunctionPointers) {
+        todo!();
     }
 
     #[repr(C)]
@@ -753,6 +773,7 @@ mod ram_helpers {
     /// Credit: taken from `rp2040-flash` (also licensed Apache+MIT)
     #[inline(never)]
     #[link_section = ".data.ram_func"]
+    #[cfg(feature = "rp2040")]
     unsafe fn read_flash_inner(cmd: FlashCommand, ptrs: *const FlashFunctionPointers) {
         #[cfg(target_arch = "arm")]
         core::arch::asm!(
@@ -797,12 +818,12 @@ mod ram_helpers {
             "adds r2, 0x60", // &DR
             "ldr r0, [r3, #0]", // cmd_addr
             "ldr r1, [r3, #4]", // cmd_addr_len
-            "10:",
+            "3:",
             "ldrb r3, [r0]",
             "strb r3, [r2]", // DR
             "adds r0, #1",
             "subs r1, #1",
-            "bne 10b",
+            "bne 3b",
 
             // Skip any dummy cycles
             "mov r3, r10", // cmd
@@ -868,6 +889,13 @@ mod ram_helpers {
             out("r10") _,
             clobber_abi("C"),
         );
+    }
+
+    #[inline(never)]
+    #[link_section = ".data.ram_func"]
+    #[cfg(feature = "_rp235x")]
+    unsafe fn read_flash_inner(_cmd: FlashCommand, _ptrs: *const FlashFunctionPointers) {
+        todo!();
     }
 }
 

@@ -15,6 +15,8 @@ use crate::{interrupt, pac};
 pub(crate) struct ChannelInfo {
     pub(crate) dma: DmaInfo,
     pub(crate) num: usize,
+    #[cfg(feature = "_dual-core")]
+    pub(crate) irq: pac::Interrupt,
     #[cfg(dmamux)]
     pub(crate) dmamux: super::DmamuxInfo,
 }
@@ -259,10 +261,12 @@ pub(crate) unsafe fn init(
     foreach_interrupt! {
         ($peri:ident, dma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, dma_priority);
+            #[cfg(not(feature = "_dual-core"))]
             crate::interrupt::typelevel::$irq::enable();
         };
         ($peri:ident, bdma, $block:ident, $signal_name:ident, $irq:ident) => {
             crate::interrupt::typelevel::$irq::set_priority_with_cs(cs, bdma_priority);
+            #[cfg(not(feature = "_dual-core"))]
             crate::interrupt::typelevel::$irq::enable();
         };
     }
@@ -341,6 +345,11 @@ impl AnyChannel {
         options: TransferOptions,
     ) {
         let info = self.info();
+        #[cfg(feature = "_dual-core")]
+        {
+            use embassy_hal_internal::interrupt::InterruptExt as _;
+            info.irq.enable();
+        }
 
         #[cfg(dmamux)]
         super::dmamux::configure_dmamux(&info.dmamux, _request);
@@ -565,16 +574,13 @@ impl<'a> Transfer<'a> {
     ) -> Self {
         into_ref!(channel);
 
-        let (ptr, len) = super::slice_ptr_parts_mut(buf);
-        assert!(len > 0 && len <= 0xFFFF);
-
         Self::new_inner(
             channel.map_into(),
             request,
             Dir::PeripheralToMemory,
             peri_addr as *const u32,
-            ptr as *mut u32,
-            len,
+            buf as *mut W as *mut u32,
+            buf.len(),
             true,
             W::size(),
             options,
@@ -602,16 +608,13 @@ impl<'a> Transfer<'a> {
     ) -> Self {
         into_ref!(channel);
 
-        let (ptr, len) = super::slice_ptr_parts(buf);
-        assert!(len > 0 && len <= 0xFFFF);
-
         Self::new_inner(
             channel.map_into(),
             request,
             Dir::MemoryToPeripheral,
             peri_addr as *const u32,
-            ptr as *mut u32,
-            len,
+            buf as *const W as *mut u32,
+            buf.len(),
             true,
             W::size(),
             options,
@@ -653,6 +656,8 @@ impl<'a> Transfer<'a> {
         data_size: WordSize,
         options: TransferOptions,
     ) -> Self {
+        assert!(mem_len > 0 && mem_len <= 0xFFFF);
+
         channel.configure(
             _request, dir, peri_addr, mem_addr, mem_len, incr_mem, data_size, options,
         );
@@ -908,6 +913,7 @@ impl<'a, W: Word> WritableRingBuffer<'a, W> {
         let data_size = W::size();
         let buffer_ptr = buffer.as_mut_ptr();
 
+        options.half_transfer_ir = true;
         options.complete_transfer_ir = true;
         options.circular = true;
 

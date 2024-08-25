@@ -98,6 +98,13 @@ impl<'a> TcpReader<'a> {
     pub fn recv_capacity(&self) -> usize {
         self.io.recv_capacity()
     }
+
+    /// Return the amount of octets queued in the receive buffer. This value can be larger than
+    /// the slice read by the next `recv` or `peek` call because it includes all queued octets,
+    /// and not only the octets that may be returned as a contiguous slice.
+    pub fn recv_queue(&self) -> usize {
+        self.io.recv_queue()
+    }
 }
 
 impl<'a> TcpWriter<'a> {
@@ -132,6 +139,11 @@ impl<'a> TcpWriter<'a> {
     pub fn send_capacity(&self) -> usize {
         self.io.send_capacity()
     }
+
+    /// Return the amount of octets queued in the transmit buffer.
+    pub fn send_queue(&self) -> usize {
+        self.io.send_queue()
+    }
 }
 
 impl<'a> TcpSocket<'a> {
@@ -161,6 +173,18 @@ impl<'a> TcpSocket<'a> {
     /// Return the maximum number of bytes inside the transmit buffer.
     pub fn send_capacity(&self) -> usize {
         self.io.send_capacity()
+    }
+
+    /// Return the amount of octets queued in the transmit buffer.
+    pub fn send_queue(&self) -> usize {
+        self.io.send_queue()
+    }
+
+    /// Return the amount of octets queued in the receive buffer. This value can be larger than
+    /// the slice read by the next `recv` or `peek` call because it includes all queued octets,
+    /// and not only the octets that may be returned as a contiguous slice.
+    pub fn recv_queue(&self) -> usize {
+        self.io.recv_queue()
     }
 
     /// Call `f` with the largest contiguous slice of octets in the transmit buffer,
@@ -491,7 +515,7 @@ impl<'d> TcpIo<'d> {
     async fn flush(&mut self) -> Result<(), Error> {
         poll_fn(move |cx| {
             self.with_mut(|s, _| {
-                let data_pending = s.send_queue() > 0;
+                let data_pending = (s.send_queue() > 0) && s.state() != tcp::State::Closed;
                 let fin_pending = matches!(
                     s.state(),
                     tcp::State::FinWait1 | tcp::State::Closing | tcp::State::LastAck
@@ -518,6 +542,14 @@ impl<'d> TcpIo<'d> {
 
     fn send_capacity(&self) -> usize {
         self.with(|s, _| s.send_capacity())
+    }
+
+    fn send_queue(&self) -> usize {
+        self.with(|s, _| s.send_queue())
+    }
+
+    fn recv_queue(&self) -> usize {
+        self.with(|s, _| s.recv_queue())
     }
 }
 
@@ -555,7 +587,7 @@ mod embedded_io_impls {
 
     impl<'d> embedded_io_async::ReadReady for TcpSocket<'d> {
         fn read_ready(&mut self) -> Result<bool, Self::Error> {
-            Ok(self.io.with(|s, _| s.may_recv()))
+            Ok(self.io.with(|s, _| s.can_recv() || !s.may_recv()))
         }
     }
 
@@ -571,7 +603,7 @@ mod embedded_io_impls {
 
     impl<'d> embedded_io_async::WriteReady for TcpSocket<'d> {
         fn write_ready(&mut self) -> Result<bool, Self::Error> {
-            Ok(self.io.with(|s, _| s.may_send()))
+            Ok(self.io.with(|s, _| s.can_send()))
         }
     }
 
@@ -587,7 +619,7 @@ mod embedded_io_impls {
 
     impl<'d> embedded_io_async::ReadReady for TcpReader<'d> {
         fn read_ready(&mut self) -> Result<bool, Self::Error> {
-            Ok(self.io.with(|s, _| s.may_recv()))
+            Ok(self.io.with(|s, _| s.can_recv() || !s.may_recv()))
         }
     }
 
@@ -607,7 +639,7 @@ mod embedded_io_impls {
 
     impl<'d> embedded_io_async::WriteReady for TcpWriter<'d> {
         fn write_ready(&mut self) -> Result<bool, Self::Error> {
-            Ok(self.io.with(|s, _| s.may_send()))
+            Ok(self.io.with(|s, _| s.can_send()))
         }
     }
 }
@@ -628,12 +660,25 @@ pub mod client {
     pub struct TcpClient<'d, D: Driver, const N: usize, const TX_SZ: usize = 1024, const RX_SZ: usize = 1024> {
         stack: &'d Stack<D>,
         state: &'d TcpClientState<N, TX_SZ, RX_SZ>,
+        socket_timeout: Option<Duration>,
     }
 
     impl<'d, D: Driver, const N: usize, const TX_SZ: usize, const RX_SZ: usize> TcpClient<'d, D, N, TX_SZ, RX_SZ> {
         /// Create a new `TcpClient`.
         pub fn new(stack: &'d Stack<D>, state: &'d TcpClientState<N, TX_SZ, RX_SZ>) -> Self {
-            Self { stack, state }
+            Self {
+                stack,
+                state,
+                socket_timeout: None,
+            }
+        }
+
+        /// Set the timeout for each socket created by this `TcpClient`.
+        ///
+        /// If the timeout is set, the socket will be closed if no data is received for the
+        /// specified duration.
+        pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+            self.socket_timeout = timeout;
         }
     }
 
@@ -659,6 +704,7 @@ pub mod client {
             };
             let remote_endpoint = (addr, remote.port());
             let mut socket = TcpConnection::new(&self.stack, self.state)?;
+            socket.socket.set_timeout(self.socket_timeout.clone());
             socket
                 .socket
                 .connect(remote_endpoint)

@@ -267,18 +267,19 @@ impl<'d, T: Instance> Driver<'d, T> {
             w.set_fres(true);
         });
 
-        #[cfg(time)]
+        #[cfg(feature = "time")]
         embassy_time::block_for(embassy_time::Duration::from_millis(100));
-        #[cfg(not(time))]
-        cortex_m::asm::delay(unsafe { crate::rcc::get_freqs() }.sys.unwrap().0 / 10);
+        #[cfg(not(feature = "time"))]
+        cortex_m::asm::delay(unsafe { crate::rcc::get_freqs() }.sys.to_hertz().unwrap().0 / 10);
 
         #[cfg(not(usb_v4))]
         regs.btable().write(|w| w.set_btable(0));
 
         #[cfg(not(stm32l1))]
         {
-            dp.set_as_af(dp.af_num(), crate::gpio::AFType::OutputPushPull);
-            dm.set_as_af(dm.af_num(), crate::gpio::AFType::OutputPushPull);
+            use crate::gpio::{AfType, OutputType, Speed};
+            dp.set_as_af(dp.af_num(), AfType::output(OutputType::PushPull, Speed::VeryHigh));
+            dm.set_as_af(dm.af_num(), AfType::output(OutputType::PushPull, Speed::VeryHigh));
         }
         #[cfg(stm32l1)]
         let _ = (dp, dm); // suppress "unused" warnings.

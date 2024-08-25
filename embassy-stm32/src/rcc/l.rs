@@ -30,6 +30,7 @@ pub struct Hse {
 }
 
 /// Clocks configuration
+#[derive(Clone, Copy)]
 pub struct Config {
     // base clock sources
     pub msi: Option<MSIRange>,
@@ -157,6 +158,13 @@ pub(crate) unsafe fn init(config: Config) {
         RCC.cfgr().write_value(Cfgr::default());
         // Wait for clock switch status bits to change.
         while RCC.cfgr().read().sws() != Sysclk::MSI {}
+    }
+
+    #[cfg(stm32wl)]
+    {
+        // Set max latency
+        FLASH.acr().modify(|w| w.set_prften(true));
+        FLASH.acr().modify(|w| w.set_latency(2));
     }
 
     // Set voltage scale
@@ -413,6 +421,9 @@ pub(crate) unsafe fn init(config: Config) {
         #[cfg(any(stm32l47x, stm32l48x, stm32l49x, stm32l4ax, rcc_l4plus, stm32l5))]
         pllsai2_r: pllsai2.r,
 
+        #[cfg(dsihost)]
+        dsi_phy: None, // DSI PLL clock not supported, don't call `RccPeripheral::frequency()` in the drivers
+
         rtc: rtc,
 
         // TODO
@@ -420,8 +431,6 @@ pub(crate) unsafe fn init(config: Config) {
         sai2_extclk: None,
         lsi: None,
         lse: None,
-        #[cfg(stm32l4)]
-        dsi_phy: None,
     );
 }
 

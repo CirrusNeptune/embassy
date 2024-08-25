@@ -179,6 +179,8 @@ pub enum PhyType {
     ///
     /// Available on a few STM32 chips.
     InternalHighSpeed,
+    /// External ULPI Full-Speed PHY (or High-Speed PHY in Full-Speed mode)
+    ExternalFullSpeed,
     /// External ULPI High-Speed PHY
     ExternalHighSpeed,
 }
@@ -188,14 +190,14 @@ impl PhyType {
     pub fn internal(&self) -> bool {
         match self {
             PhyType::InternalFullSpeed | PhyType::InternalHighSpeed => true,
-            PhyType::ExternalHighSpeed => false,
+            PhyType::ExternalHighSpeed | PhyType::ExternalFullSpeed => false,
         }
     }
 
     /// Get whether this PHY is any of the high-speed types.
     pub fn high_speed(&self) -> bool {
         match self {
-            PhyType::InternalFullSpeed => false,
+            PhyType::InternalFullSpeed | PhyType::ExternalFullSpeed => false,
             PhyType::ExternalHighSpeed | PhyType::InternalHighSpeed => true,
         }
     }
@@ -204,6 +206,7 @@ impl PhyType {
         match self {
             PhyType::InternalFullSpeed => vals::Dspd::FULL_SPEED_INTERNAL,
             PhyType::InternalHighSpeed => vals::Dspd::HIGH_SPEED,
+            PhyType::ExternalFullSpeed => vals::Dspd::FULL_SPEED_EXTERNAL,
             PhyType::ExternalHighSpeed => vals::Dspd::HIGH_SPEED,
         }
     }
@@ -220,6 +223,12 @@ struct EpState {
     out_buffer: UnsafeCell<*mut u8>,
     out_size: AtomicU16,
 }
+
+// SAFETY: The EndpointAllocator ensures that the buffer points to valid memory exclusive for each endpoint and is
+// large enough to hold the maximum packet size. Access to the buffer is synchronized between the USB interrupt and the
+// EndpointOut impl using the out_size atomic variable.
+unsafe impl Send for EpState {}
+unsafe impl Sync for EpState {}
 
 struct ControlPipeSetupState {
     /// Holds received SETUP packets. Available if [Ep0State::setup_ready] is true.
@@ -287,11 +296,22 @@ pub struct Config {
     /// If you set this to true, you must connect VBUS to PA9 for FS, PB13 for HS, possibly with a
     /// voltage divider. See ST application note AN4879 and the reference manual for more details.
     pub vbus_detection: bool,
+
+    /// Enable transceiver delay.
+    ///
+    /// Some ULPI PHYs like the Microchip USB334x series require a delay between the ULPI register write that initiates
+    /// the HS Chirp and the subsequent transmit command, otherwise the HS Chirp does not get executed and the deivce
+    /// enumerates in FS mode. Some USB Link IP like those in the STM32H7 series support adding this delay to work with
+    /// the affected PHYs.
+    pub xcvrdly: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { vbus_detection: true }
+        Self {
+            vbus_detection: false,
+            xcvrdly: false,
+        }
     }
 }
 
@@ -365,8 +385,8 @@ impl<'d, const MAX_EP_COUNT: usize> Driver<'d, MAX_EP_COUNT> {
         }
 
         let eps = match D::dir() {
-            Direction::Out => &mut self.ep_out,
-            Direction::In => &mut self.ep_in,
+            Direction::Out => &mut self.ep_out[..self.instance.endpoint_count],
+            Direction::In => &mut self.ep_in[..self.instance.endpoint_count],
         };
 
         // Find free endpoint slot
@@ -575,6 +595,9 @@ impl<'d, const MAX_EP_COUNT: usize> Bus<'d, MAX_EP_COUNT> {
         r.dcfg().write(|w| {
             w.set_pfivl(vals::Pfivl::FRAME_INTERVAL_80);
             w.set_dspd(phy_type.to_dspd());
+            if self.config.xcvrdly {
+                w.set_xcvrdly(true);
+            }
         });
 
         // Unmask transfer complete EP interrupt
@@ -1034,7 +1057,7 @@ impl<'d> embassy_usb_driver::EndpointOut for Endpoint<'d, Out> {
                     return Poll::Ready(Err(EndpointError::BufferOverflow));
                 }
 
-                // SAFETY: exclusive access ensured by `ep_out_size` atomic variable
+                // SAFETY: exclusive access ensured by `out_size` atomic variable
                 let data = unsafe { core::slice::from_raw_parts(*self.state.out_buffer.get(), len as usize) };
                 buf[..len as usize].copy_from_slice(data);
 

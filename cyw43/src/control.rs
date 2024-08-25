@@ -42,9 +42,11 @@ pub enum ScanType {
     Passive,
 }
 
+/// Scan options.
 #[derive(Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScanOptions {
+    /// SSID to scan for.
     pub ssid: Option<heapless::String<32>>,
     /// If set to `None`, all APs will be returned. If set to `Some`, only APs
     /// with the specified BSSID will be returned.
@@ -81,8 +83,7 @@ impl<'a> Control<'a> {
         }
     }
 
-    /// Initialize WiFi controller.
-    pub async fn init(&mut self, clm: &[u8]) {
+    async fn load_clm(&mut self, clm: &[u8]) {
         const CHUNK_SIZE: usize = 1024;
 
         debug!("Downloading CLM...");
@@ -114,6 +115,11 @@ impl<'a> Control<'a> {
 
         // check clmload ok
         assert_eq!(self.get_iovar_u32("clmload_status").await, 0);
+    }
+
+    /// Initialize WiFi controller.
+    pub async fn init(&mut self, clm: &[u8]) {
+        self.load_clm(&clm).await;
 
         debug!("Configuring misc stuff...");
 
@@ -184,7 +190,7 @@ impl<'a> Control<'a> {
 
         self.state_ch.set_hardware_address(HardwareAddress::Ethernet(mac_addr));
 
-        debug!("INIT DONE");
+        debug!("cyw43 control init done");
     }
 
     /// Set the WiFi interface up.
@@ -391,6 +397,24 @@ impl<'a> Control<'a> {
 
         // Start AP
         self.set_iovar_u32x2("bss", 0, 1).await; // bss = BSS_UP
+    }
+
+    /// Closes access point.
+    pub async fn close_ap(&mut self) {
+        // Stop AP
+        self.set_iovar_u32x2("bss", 0, 0).await; // bss = BSS_DOWN
+
+        // Turn off AP mode
+        self.ioctl_set_u32(IOCTL_CMD_SET_AP, 0, 0).await;
+
+        // Temporarily set wifi down
+        self.down().await;
+
+        // Turn on APSTA mode
+        self.set_iovar_u32("apsta", 1).await;
+
+        // Set wifi up again
+        self.up().await;
     }
 
     /// Add specified address to the list of hardware addresses the device

@@ -18,7 +18,7 @@ const DMA_BUF_SIZE: usize = 256;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let p = embassy_stm32::init(config());
+    let p = init();
     info!("Hello World!");
 
     // Arduino pins D0 and D1
@@ -52,7 +52,7 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task]
-async fn transmit_task(mut tx: UartTx<'static, peris::UART, Async>) {
+async fn transmit_task(mut tx: UartTx<'static, Async>) {
     // workaround https://github.com/embassy-rs/embassy/issues/1426
     Timer::after_millis(100).await;
 
@@ -75,7 +75,7 @@ async fn transmit_task(mut tx: UartTx<'static, peris::UART, Async>) {
 }
 
 #[embassy_executor::task]
-async fn receive_task(mut rx: RingBufferedUartRx<'static, peris::UART>) {
+async fn receive_task(mut rx: RingBufferedUartRx<'static>) {
     info!("Ready to receive...");
 
     let mut rng = ChaCha8Rng::seed_from_u64(1337);

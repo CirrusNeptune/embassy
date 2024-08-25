@@ -2,6 +2,7 @@
 name = "embassy-usb-synopsys-otg"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "`embassy-usb-driver` implementation for Synopsys OTG USB controllers"
 keywords = ["embedded", "async", "usb", "hal", "embedded-hal"]
 categories = ["embedded", "hardware-support", "no-std", "asynchronous"]
@@ -17,7 +18,7 @@ target = "thumbv7em-none-eabi"
 [dependencies]
 critical-section = "1.1"
 
-embassy-sync = { version = "0.5.0", path = "../embassy-sync" }
+embassy-sync = { version = "0.6.0", path = "../embassy-sync" }
 embassy-usb-driver = {version = "0.1.0", path = "../embassy-usb-driver" }
 
 defmt = { version = "0.3", optional = true }

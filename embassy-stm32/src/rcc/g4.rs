@@ -32,6 +32,7 @@ pub struct Hse {
 /// Use this struct to configure the PLL source, input frequency, multiplication factor, and output
 /// dividers. Be sure to keep check the datasheet for your specific part for the appropriate
 /// frequency ranges for each of these settings.
+#[derive(Clone, Copy)]
 pub struct Pll {
     /// PLL Source clock selection.
     pub source: PllSource,
@@ -54,6 +55,7 @@ pub struct Pll {
 
 /// Clocks configutation
 #[non_exhaustive]
+#[derive(Clone, Copy)]
 pub struct Config {
     /// HSI Enable
     pub hsi: bool,
@@ -117,17 +119,18 @@ pub struct PllFreq {
 }
 
 pub(crate) unsafe fn init(config: Config) {
+    // Turn on the HSI
+    RCC.cr().modify(|w| w.set_hsion(true));
+    while !RCC.cr().read().hsirdy() {}
+
+    // Use the HSI clock as system clock during the actual clock setup
+    RCC.cfgr().modify(|w| w.set_sw(Sysclk::HSI));
+    while RCC.cfgr().read().sws() != Sysclk::HSI {}
+
     // Configure HSI
     let hsi = match config.hsi {
-        false => {
-            RCC.cr().modify(|w| w.set_hsion(false));
-            None
-        }
-        true => {
-            RCC.cr().modify(|w| w.set_hsion(true));
-            while !RCC.cr().read().hsirdy() {}
-            Some(HSI_FREQ)
-        }
+        false => None,
+        true => Some(HSI_FREQ),
     };
 
     // Configure HSE
@@ -285,6 +288,12 @@ pub(crate) unsafe fn init(config: Config) {
         w.set_ppre1(config.apb1_pre);
         w.set_ppre2(config.apb2_pre);
     });
+    while RCC.cfgr().read().sws() != config.sys {}
+
+    // Disable HSI if not used
+    if !config.hsi {
+        RCC.cr().modify(|w| w.set_hsion(false));
+    }
 
     if config.low_power_run {
         assert!(sys <= Hertz(2_000_000));

@@ -55,12 +55,12 @@ const IP_ADDRESS: Ipv4Cidr = Ipv4Cidr::new(Ipv4Address([192, 168, 1, 5]), 24);
 // Listen port for the webserver
 const HTTP_LISTEN_PORT: u16 = 80;
 
-pub type SpeSpi = Spi<'static, peripherals::SPI2, Async>;
+pub type SpeSpi = Spi<'static, Async>;
 pub type SpeSpiCs = ExclusiveDevice<SpeSpi, Output<'static>, Delay>;
 pub type SpeInt = exti::ExtiInput<'static>;
 pub type SpeRst = Output<'static>;
 pub type Adin1110T = ADIN1110<SpeSpiCs>;
-pub type TempSensI2c = I2c<'static, peripherals::I2C3, Async>;
+pub type TempSensI2c = I2c<'static, Async>;
 
 static TEMP: AtomicI32 = AtomicI32::new(0);
 
@@ -207,13 +207,8 @@ async fn main(spawner: Spawner) {
 
     // Init network stack
     static STACK: StaticCell<Stack<Device<'static>>> = StaticCell::new();
-    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
-    let stack = &*STACK.init(Stack::new(
-        device,
-        ip_cfg,
-        RESOURCES.init(StackResources::<2>::new()),
-        seed,
-    ));
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(device, ip_cfg, RESOURCES.init(StackResources::new()), seed));
 
     // Launch network task
     unwrap!(spawner.spawn(net_task(stack)));
