@@ -256,10 +256,10 @@ impl<'d, PIO: pio::Instance, const SM: usize, DMA: dma::Channel> Leds<'d, PIO, S
                 }
             }
             Effect::Rainbow => {
-                let base = ((cur_period * self.effect_speed as u64 / 64) % 65535) as u32;
-                const LED_OFFSET: u32 = 65535_u32 / NUM_LEDS as u32;
+                let base = ((cur_period * self.effect_speed as u64 / 64) % 0x10000) as u32;
+                const LED_OFFSET: u32 = 0x10000_u32 / NUM_LEDS as u32;
                 for i in 0..NUM_LEDS {
-                    self.buffer[i] = Color::from_hsv(((base + LED_OFFSET * i as u32) % 65535) as u16, 255, self.brightness).encode_for_sk6812();
+                    self.buffer[i] = Color::from_hsv(((base + LED_OFFSET * i as u32) % 0x10000) as u16, 255, self.brightness).encode_for_sk6812();
                 }
             }
         }
